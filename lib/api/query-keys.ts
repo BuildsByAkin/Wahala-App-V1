@@ -29,3 +29,33 @@ export const depositKeys = {
   status: (reference: string | undefined) =>
     [...depositKeys.all, 'status', reference] as const,
 };
+
+export const banksKeys = {
+  all: ['banks'] as const,
+  list: () => [...banksKeys.all, 'list'] as const,
+};
+
+export const bankAccountsKeys = {
+  all: ['bank-accounts'] as const,
+  list: () => [...bankAccountsKeys.all, 'list'] as const,
+};
+
+export const kycKeys = {
+  all: ['kyc'] as const,
+  bvn: () => [...kycKeys.all, 'bvn'] as const,
+};
+
+export const leaderboardKeys = {
+  all: ['leaderboard'] as const,
+  // Page size is the only parameter that splits the cache; offset is part of
+  // the infinite-query cursor, not the key.
+  list: (params: { limit: number }) =>
+    [...leaderboardKeys.all, 'list', params] as const,
+};
+
+export const withdrawalKeys = {
+  all: ['withdrawals'] as const,
+  list: () => [...withdrawalKeys.all, 'list'] as const,
+  status: (id: string | undefined) =>
+    [...withdrawalKeys.all, 'status', id] as const,
+};

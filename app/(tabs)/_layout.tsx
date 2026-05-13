@@ -59,6 +59,15 @@ export default function TabLayout() {
         }}
       />
       <Tabs.Screen
+        name="leaderboard"
+        options={{
+          title: 'Leaders',
+          tabBarIcon: ({ color }) => (
+            <Feather name="award" size={24} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
         name="portfolio"
         options={{
           title: 'Portfolio',
@@ -70,8 +79,14 @@ export default function TabLayout() {
       <Tabs.Screen
         name="profile"
         options={{
-          title: 'You',
-          tabBarIcon: ({ color }) => <Feather name="user" size={24} color={color} />,
+          title: 'Profile',
+          tabBarIcon: ({ focused }) => (
+            <Feather
+              name="user"
+              size={24}
+              color={focused ? '#FF6500' : '#777777'}
+            />
+          ),
         }}
       />
     </Tabs>

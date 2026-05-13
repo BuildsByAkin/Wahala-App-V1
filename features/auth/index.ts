@@ -7,6 +7,7 @@ export {
   logout,
   setHydrated,
   setAuthSession,
+  setPhoneNumber,
   applyMe,
   applyWallet,
   type AuthState,

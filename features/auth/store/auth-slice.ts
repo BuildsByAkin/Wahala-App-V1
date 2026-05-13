@@ -14,6 +14,12 @@ export type AuthState = {
   userId: string | null;
   username: string | null;
   displayName: string | null;
+  // E.164-normalized Nigerian phone, captured at login/signup so the profile
+  // screen can render it without an extra round-trip. Optional because the
+  // /me payload doesn't return it today.
+  phoneNumber: string | null;
+  // Whether this user is visible on the public /leaderboard. Defaults to false.
+  leaderboardOptIn: boolean;
   // Kept as a string — it's a bigint kobo value from the API.
   walletAvailableKobo: string | null;
   walletLockedKobo: string | null;
@@ -28,6 +34,8 @@ const initialState: AuthState = {
   userId: null,
   username: null,
   displayName: null,
+  phoneNumber: null,
+  leaderboardOptIn: false,
   walletAvailableKobo: null,
   walletLockedKobo: null,
   hydrated: false,
@@ -43,6 +51,8 @@ const authSlice = createSlice({
       state.userId = null;
       state.username = null;
       state.displayName = null;
+      state.phoneNumber = null;
+      state.leaderboardOptIn = false;
       state.walletAvailableKobo = null;
       state.walletLockedKobo = null;
     },
@@ -58,6 +68,7 @@ const authSlice = createSlice({
         userId: string;
         username: string;
         displayName?: string | null;
+        phoneNumber?: string | null;
       }>
     ) => {
       state.accessToken = action.payload.accessToken;
@@ -66,12 +77,22 @@ const authSlice = createSlice({
       if (action.payload.displayName !== undefined) {
         state.displayName = action.payload.displayName;
       }
+      if (action.payload.phoneNumber !== undefined) {
+        state.phoneNumber = action.payload.phoneNumber;
+      }
       state.isAuthenticated = true;
+    },
+    setPhoneNumber: (state, action: PayloadAction<string | null>) => {
+      state.phoneNumber = action.payload;
     },
     applyMe: (state, action: PayloadAction<MeResponse>) => {
       state.userId = action.payload.userId;
       state.username = action.payload.username;
       state.displayName = action.payload.displayName;
+      state.leaderboardOptIn = action.payload.leaderboardOptIn ?? false;
+      if (action.payload.phoneNumber) {
+        state.phoneNumber = action.payload.phoneNumber;
+      }
       state.walletAvailableKobo = action.payload.wallet.availableKobo;
       state.walletLockedKobo = action.payload.wallet.lockedKobo;
     },
@@ -85,7 +106,13 @@ const authSlice = createSlice({
   },
 });
 
-export const { logout, setHydrated, setAuthSession, applyMe, applyWallet } =
-  authSlice.actions;
+export const {
+  logout,
+  setHydrated,
+  setAuthSession,
+  setPhoneNumber,
+  applyMe,
+  applyWallet,
+} = authSlice.actions;
 
 export default authSlice.reducer;

@@ -17,12 +17,20 @@ export type LoginResponse = {
 
 export type MeResponse = {
   userId: string;
+  phoneNumber?: string;
   username: string;
   displayName: string | null;
+  leaderboardOptIn: boolean;
   wallet: {
     availableKobo: string;
     lockedKobo: string;
   };
+};
+
+export type UpdateMePayload = {
+  username?: string;
+  displayName?: string;
+  leaderboardOptIn?: boolean;
 };
 
 export const authApi = {
@@ -55,7 +63,7 @@ export const authApi = {
     return data;
   },
 
-  updateMe: async (params: { displayName: string }): Promise<MeResponse> => {
+  updateMe: async (params: UpdateMePayload): Promise<MeResponse> => {
     const { data } = await api.patch<MeResponse>('/me', params);
     return data;
   },

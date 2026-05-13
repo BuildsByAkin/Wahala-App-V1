@@ -11,13 +11,18 @@
 import { useCallback } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
-import { authApi, type MeResponse } from '@/features/auth/api/auth-api';
+import {
+  authApi,
+  type MeResponse,
+  type UpdateMePayload,
+} from '@/features/auth/api/auth-api';
 import {
   applyMe,
   logout,
   setAuthSession,
 } from '@/features/auth/store/auth-slice';
 import { extractApiError } from '@/lib/api/axios';
+import { leaderboardKeys } from '@/lib/api/query-keys';
 import { normalizeNigerianPhone } from '@/lib/utils/phone';
 import { useAppDispatch, useAppSelector } from '@/store';
 
@@ -71,13 +76,14 @@ export function useAuth() {
 
   const signupMutation = useMutation({
     mutationFn: (vars: { phoneNumber: string; otp: string; pin: string }) =>
-      authApi.signupComplete(vars),
+      authApi.signupComplete(vars).then((res) => ({ ...res, phoneNumber: vars.phoneNumber })),
     onSuccess: (res) => {
       dispatch(
         setAuthSession({
           accessToken: res.accessToken,
           userId: res.userId,
           username: res.username,
+          phoneNumber: res.phoneNumber,
         })
       );
       // Prime the /me cache; the next render will fetch fresh wallet balances.
@@ -96,6 +102,7 @@ export function useAuth() {
           userId: res.userId,
           username: res.username,
           displayName: res.displayName,
+          phoneNumber: vars.phoneNumber,
         })
       );
       const me = await authApi.getMe();
@@ -106,11 +113,17 @@ export function useAuth() {
     },
   });
 
-  const updateNameMutation = useMutation({
-    mutationFn: (displayName: string) => authApi.updateMe({ displayName }),
-    onSuccess: (me) => {
+  const updateMeMutation = useMutation({
+    mutationFn: (payload: UpdateMePayload) => authApi.updateMe(payload),
+    onSuccess: (me, vars) => {
       dispatch(applyMe(me));
       queryClient.setQueryData(authKeys.me(), me);
+      // Toggling leaderboard visibility changes membership of /leaderboard,
+      // so blow that cache away. Done unconditionally on opt-in changes
+      // (cheap; the screen will refetch on next mount or focus).
+      if (vars.leaderboardOptIn !== undefined) {
+        queryClient.invalidateQueries({ queryKey: leaderboardKeys.all });
+      }
     },
   });
 
@@ -166,13 +179,25 @@ export function useAuth() {
   const setDisplayName = useCallback(
     async (displayName: string): Promise<Result> => {
       try {
-        await updateNameMutation.mutateAsync(displayName);
+        await updateMeMutation.mutateAsync({ displayName });
         return { ok: true };
       } catch (e) {
         return { ok: false, error: toErr(e) };
       }
     },
-    [updateNameMutation]
+    [updateMeMutation]
+  );
+
+  const setLeaderboardOptIn = useCallback(
+    async (leaderboardOptIn: boolean): Promise<Result> => {
+      try {
+        await updateMeMutation.mutateAsync({ leaderboardOptIn });
+        return { ok: true };
+      } catch (e) {
+        return { ok: false, error: toErr(e) };
+      }
+    },
+    [updateMeMutation]
   );
 
   const refreshMe = useCallback(() => {
@@ -189,21 +214,21 @@ export function useAuth() {
     otpMutation.isPending ||
     signupMutation.isPending ||
     loginMutation.isPending ||
-    updateNameMutation.isPending;
+    updateMeMutation.isPending;
 
   const error =
     (loginMutation.error && toErr(loginMutation.error)) ||
     (signupMutation.error && toErr(signupMutation.error)) ||
     (otpMutation.error && toErr(otpMutation.error)) ||
-    (updateNameMutation.error && toErr(updateNameMutation.error)) ||
+    (updateMeMutation.error && toErr(updateMeMutation.error)) ||
     null;
 
   const clearError = useCallback(() => {
     otpMutation.reset();
     signupMutation.reset();
     loginMutation.reset();
-    updateNameMutation.reset();
-  }, [otpMutation, signupMutation, loginMutation, updateNameMutation]);
+    updateMeMutation.reset();
+  }, [otpMutation, signupMutation, loginMutation, updateMeMutation]);
 
   return {
     ...auth,
@@ -213,6 +238,7 @@ export function useAuth() {
     signup,
     login,
     setDisplayName,
+    setLeaderboardOptIn,
     refreshMe,
     signOut,
     clearError,

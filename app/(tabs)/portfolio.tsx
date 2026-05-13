@@ -91,7 +91,6 @@ export default function PortfolioScreen() {
   const cashLabel = formatKoboAsCompactNaira(walletAvailableKobo);
   const positionsLabel = formatKoboAsCompactNaira(positionsKobo);
   const fullBalance = formatKoboAsNaira(walletAvailableKobo);
-  const changeLabel = '₦0 (0%)';
 
   const isRefreshing =
     active === 'open'
@@ -170,7 +169,6 @@ export default function PortfolioScreen() {
                 {totalLabel}
               </Text>
             </View>
-            <Text style={styles.changeText}>{changeLabel}</Text>
           </View>
 
           <Pressable
@@ -453,12 +451,6 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     letterSpacing: -0.5,
     includeFontPadding: false,
-  },
-  changeText: {
-    marginTop: rs.size(2),
-    fontFamily: Fonts.medium,
-    fontSize: rs.font(13),
-    color: '#888888',
   },
   depositButton: {
     flexDirection: 'row',
