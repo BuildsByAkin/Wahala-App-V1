@@ -4,15 +4,25 @@ import { StyleSheet, View, Text } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import { Fonts } from '@/constants/fonts';
 import { rs } from '@/utils/responsive';
-import { Market } from '@/data/placeholder';
-import { AvatarStack } from './AvatarStack';
+import {
+  type Market,
+  formatClosesIn,
+  formatPoolKobo,
+  getOutcomeMultiplier,
+  getOutcomePercent,
+  hasPool,
+} from '@/utils/market';
 
 interface MarketCardCompactProps {
   market: Market;
 }
 
+const DOT_PALETTE = ['#4CAF50', '#FF3B30', '#29B6F6', '#FFA726'];
+
 export const MarketCardCompact: React.FC<MarketCardCompactProps> = ({ market }) => {
-  const isLive = market.badges.includes('LIVE');
+  const poolExists = hasPool(market.totalPoolKobo);
+  const closesLabel = formatClosesIn(market.closesAt);
+  const outcomes = (market.outcomes ?? []).slice(0, 2);
 
   return (
     <View style={styles.container}>
@@ -20,24 +30,12 @@ export const MarketCardCompact: React.FC<MarketCardCompactProps> = ({ market }) 
       <View style={styles.header}>
         <View style={styles.tags}>
           <View style={styles.categoryTag}>
-            <Text style={styles.categoryText}>{market.category}</Text>
+            <Text style={styles.categoryText}>{market.category.toUpperCase()}</Text>
           </View>
-          {isLive && (
-            <View style={styles.liveTag}>
-              <View style={styles.liveDot} />
-              <Text style={styles.liveText}>LIVE</Text>
-            </View>
-          )}
         </View>
         <View style={styles.rightInfo}>
-          {market.liveScore ? (
-            <>
-              <Feather name="disc" size={rs.font(11)} color="#888888" />
-              <Text style={styles.infoText}>{market.liveScore}</Text>
-            </>
-          ) : (
-            <Text style={styles.infoText}>{market.closesLabel}</Text>
-          )}
+          <Feather name="clock" size={rs.font(11)} color="#888888" />
+          <Text style={styles.infoText}>{closesLabel}</Text>
         </View>
       </View>
 
@@ -45,38 +43,51 @@ export const MarketCardCompact: React.FC<MarketCardCompactProps> = ({ market }) 
       <Text style={styles.question}>{market.question}</Text>
 
       {/* Outcome pills */}
-      <View style={styles.outcomes}>
-        {market.outcomes.map((outcome, index) => {
-          const isYes = outcome.label === 'Yes';
-          const dotColor = isYes ? '#4CAF50' : '#FF3B30';
-          return (
-            <View key={index} style={styles.outcomePill}>
-              <View style={styles.outcomeLeft}>
-                <View style={[styles.dot, { backgroundColor: dotColor }]} />
-                <Text style={styles.outcomeLabel}>{outcome.label}</Text>
+      {outcomes.length > 0 && (
+        <View style={styles.outcomes}>
+          {outcomes.map((outcome, index) => {
+            const dotColor = DOT_PALETTE[index] ?? '#888888';
+            const percent = poolExists
+              ? getOutcomePercent(outcome.totalStakedKobo, market.totalPoolKobo)
+              : null;
+            const multiplier = poolExists
+              ? getOutcomeMultiplier(outcome.totalStakedKobo, market.totalPoolKobo)
+              : null;
+            return (
+              <View key={outcome.id} style={styles.outcomePill}>
+                <View style={styles.outcomeLeft}>
+                  <View style={[styles.dot, { backgroundColor: dotColor }]} />
+                  <Text style={styles.outcomeLabel}>{outcome.label}</Text>
+                </View>
+                {percent !== null && multiplier !== null && (
+                  <Text style={styles.outcomeRight}>
+                    {percent}% · {multiplier}x
+                  </Text>
+                )}
               </View>
-              <Text style={styles.outcomeRight}>
-                {outcome.percent}% · {outcome.multiplier}x
-              </Text>
-            </View>
-          );
-        })}
-      </View>
+            );
+          })}
+        </View>
+      )}
 
       {/* Pool row */}
       <View style={styles.poolRow}>
-        <View style={styles.poolLeft}>
-          <AvatarStack colors={market.avatarColors} extra={market.extraAvatars} />
-          <View style={styles.poolInfo}>
-            <Text style={styles.poolAmount}>{market.poolAmount}</Text>
-            <Text style={styles.poolLabel}> pool</Text>
-          </View>
+        <View style={styles.poolInfo}>
+          {poolExists ? (
+            <>
+              <Text style={styles.poolAmount}>{formatPoolKobo(market.totalPoolKobo)}</Text>
+              <Text style={styles.poolLabel}> pool</Text>
+            </>
+          ) : (
+            <Text style={styles.firstStake}>Be the first to stake</Text>
+          )}
         </View>
         <View style={styles.comments}>
           <Feather name="message-square" size={rs.font(13)} color="#888888" />
           <Text style={styles.commentCount}> {market.commentCount}</Text>
         </View>
       </View>
+
     </View>
   );
 };
@@ -108,26 +119,6 @@ const styles = StyleSheet.create({
     fontSize: rs.font(10),
     color: '#AAAAAA',
     letterSpacing: 0.5,
-  },
-  liveTag: {
-    backgroundColor: '#FF3B30',
-    borderRadius: rs.size(6),
-    paddingHorizontal: rs.size(8),
-    paddingVertical: rs.size(3),
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: rs.size(4),
-  },
-  liveDot: {
-    width: rs.size(6),
-    height: rs.size(6),
-    borderRadius: rs.size(3),
-    backgroundColor: '#FFFFFF',
-  },
-  liveText: {
-    fontFamily: Fonts.bold,
-    fontSize: rs.font(10),
-    color: '#FFFFFF',
   },
   rightInfo: {
     flexDirection: 'row',
@@ -196,6 +187,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginLeft: rs.size(8),
   },
+  poolInfoNoAvatars: {
+    marginLeft: 0,
+  },
   poolAmount: {
     fontFamily: Fonts.bold,
     fontSize: rs.font(13),
@@ -205,6 +199,11 @@ const styles = StyleSheet.create({
     fontFamily: Fonts.regular,
     fontSize: rs.font(13),
     color: '#888888',
+  },
+  firstStake: {
+    fontFamily: Fonts.medium,
+    fontSize: rs.font(13),
+    color: '#FF6500',
   },
   comments: {
     flexDirection: 'row',

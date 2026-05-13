@@ -16,8 +16,8 @@ import {
   useSelector as useReduxSelector,
 } from 'react-redux';
 
-import authReducer from '@/features/auth/store/auth-slice';
-import { injectStore } from '@/lib/api/store-ref';
+import authReducer, { logout } from '@/features/auth/store/auth-slice';
+import { injectLogoutAction, injectStore } from '@/lib/api/store-ref';
 import { secureStorage } from '@/lib/storage/secure-storage';
 
 const authPersistConfig = {
@@ -52,8 +52,10 @@ export const store = configureStore({
 
 export const persistor = persistStore(store);
 
-// Wire the store into the axios layer (late binding to avoid circular imports).
+// Wire the store + logout action into the axios layer (late binding to avoid
+// circular imports between the store, slices, and the axios instance).
 injectStore(store);
+injectLogoutAction(() => logout());
 
 export type RootState = ReturnType<typeof store.getState>;
 export type AppDispatch = typeof store.dispatch;

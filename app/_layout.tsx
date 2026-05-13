@@ -12,9 +12,29 @@ import { useEffect } from 'react';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { Provider } from 'react-redux';
 import { PersistGate } from 'redux-persist/integration/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
-import { useAuth } from '@/features/auth';
-import { persistor, store } from '@/store';
+import { setHydrated } from '@/features/auth';
+import { persistor, store, useAppDispatch, useAppSelector } from '@/store';
+
+// Singleton query client tuned for a mobile betting app:
+//   - retry once on transient failures (mutations never auto-retry)
+//   - refetch on reconnect (Wi-Fi → mobile transitions are common)
+//   - generous staleTime so screen mounts don't refetch the world
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      retry: 1,
+      refetchOnWindowFocus: false,
+      refetchOnReconnect: true,
+      staleTime: 30_000,
+      gcTime: 5 * 60_000,
+    },
+    mutations: {
+      retry: 0,
+    },
+  },
+});
 
 SplashScreen.preventAutoHideAsync().catch(() => {
   /* noop */
@@ -23,11 +43,20 @@ SplashScreen.preventAutoHideAsync().catch(() => {
 function AuthGate() {
   const router = useRouter();
   const segments = useSegments();
-  const { isAuthenticated } = useAuth();
+  const dispatch = useAppDispatch();
+  const isAuthenticated = useAppSelector((s) => s.auth.isAuthenticated);
+  const hydrated = useAppSelector((s) => s.auth.hydrated);
+
+  // PersistGate's onBeforeLift runs *before* this tree mounts, so by the time
+  // we get here the rehydrate has completed. Flip the slice flag once.
+  useEffect(() => {
+    if (!hydrated) dispatch(setHydrated(true));
+  }, [hydrated, dispatch]);
 
   useEffect(() => {
+    if (!hydrated) return;
     const first = segments[0] as string | undefined;
-    // Allow the splash screen (app/index.tsx) to render briefly without redirecting.
+    // The splash screen (app/index.tsx) handles its own redirect; don't fight it.
     if (!first) return;
 
     const inAuthFlow = first === 'auth' || first === 'signup';
@@ -37,7 +66,7 @@ function AuthGate() {
     } else if (isAuthenticated && inAuthFlow) {
       router.replace('/(tabs)');
     }
-  }, [isAuthenticated, segments, router]);
+  }, [hydrated, isAuthenticated, segments, router]);
 
   return null;
 }
@@ -64,16 +93,18 @@ export default function RootLayout() {
   return (
     <Provider store={store}>
       <PersistGate loading={null} persistor={persistor}>
-        <SafeAreaProvider>
-          <AuthGate />
-          <Stack
-            screenOptions={{
-              headerShown: false,
-              contentStyle: { backgroundColor: '#0A0A0A' },
-              animation: 'fade',
-            }}
-          />
-        </SafeAreaProvider>
+        <QueryClientProvider client={queryClient}>
+          <SafeAreaProvider>
+            <AuthGate />
+            <Stack
+              screenOptions={{
+                headerShown: false,
+                contentStyle: { backgroundColor: '#0A0A0A' },
+                animation: 'fade',
+              }}
+            />
+          </SafeAreaProvider>
+        </QueryClientProvider>
       </PersistGate>
     </Provider>
   );

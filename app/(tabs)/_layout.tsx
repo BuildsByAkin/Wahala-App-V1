@@ -1,29 +1,40 @@
 // app/(tabs)/_layout.tsx
 import { Tabs } from 'expo-router';
 import { Feather } from '@expo/vector-icons';
-import { StyleSheet, View, Text, Pressable, Platform } from 'react-native';
+import { StyleSheet, View, Text } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Fonts } from '@/constants/fonts';
 import { rs } from '@/utils/responsive';
+import { useAuth, useMe } from '@/features/auth';
+import { formatKoboAsCompactNaira } from '@/lib/utils/money';
 
-function CustomTabBarButton({ children, onPress }: any) {
+function PortfolioBalanceIcon({ color, focused }: { color: string; focused: boolean }) {
+  const { walletAvailableKobo } = useAuth();
+  const balance = formatKoboAsCompactNaira(walletAvailableKobo);
   return (
-    <Pressable
-      onPress={() => {
-        console.log('create tapped');
-        onPress?.();
-      }}
-      style={styles.createButtonContainer}
-    >
-      <View style={styles.createButton}>
-        <Text style={styles.createButtonPlus}>+</Text>
-      </View>
-    </Pressable>
+    <View style={styles.balanceIconWrap}>
+      <Text
+        numberOfLines={1}
+        adjustsFontSizeToFit
+        style={[
+          styles.balanceIconText,
+          { color },
+          focused && styles.balanceIconTextFocused,
+        ]}
+      >
+        <Text style={styles.balanceIconNaira}>₦</Text>
+        {balance}
+      </Text>
+    </View>
   );
 }
 
 export default function TabLayout() {
   const insets = useSafeAreaInsets();
+  // Subscribe to /me once for the whole authenticated session. TanStack Query
+  // dedupes, so child screens reading from Redux always see the latest snapshot
+  // without each issuing their own /me call.
+  useMe();
 
   return (
     <Tabs
@@ -53,24 +64,12 @@ export default function TabLayout() {
         }}
       />
       <Tabs.Screen
-        name="gist"
+        name="portfolio"
         options={{
-          title: 'Gist',
-          tabBarIcon: ({ color }) => <Feather name="message-square" size={24} color={color} />,
-        }}
-      />
-      <Tabs.Screen
-        name="create"
-        options={{
-          tabBarLabel: () => null,
-          tabBarButton: (props) => <CustomTabBarButton {...props} />,
-        }}
-      />
-      <Tabs.Screen
-        name="wallet"
-        options={{
-          title: 'Wallet',
-          tabBarIcon: ({ color }) => <Feather name="credit-card" size={24} color={color} />,
+          title: 'Portfolio',
+          tabBarIcon: ({ color, focused }) => (
+            <PortfolioBalanceIcon color={color} focused={focused} />
+          ),
         }}
       />
       <Tabs.Screen
@@ -85,34 +84,25 @@ export default function TabLayout() {
 }
 
 const styles = StyleSheet.create({
-  createButtonContainer: {
-    top: rs.size(-16),
-    justifyContent: 'center',
+  balanceIconWrap: {
+    minWidth: rs.size(40),
+    maxWidth: rs.size(72),
+    height: rs.size(24),
     alignItems: 'center',
-  },
-  createButton: {
-    width: rs.size(56),
-    height: rs.size(56),
-    borderRadius: rs.size(28),
-    backgroundColor: '#FF6500',
     justifyContent: 'center',
-    alignItems: 'center',
-    ...Platform.select({
-      ios: {
-        shadowColor: '#FF6500',
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.4,
-        shadowRadius: 8,
-      },
-      android: {
-        elevation: 8,
-      },
-    }),
+    paddingHorizontal: rs.size(4),
   },
-  createButtonPlus: {
+  balanceIconText: {
     fontFamily: Fonts.bold,
-    fontSize: rs.font(28),
-    color: '#000000',
-    marginTop: Platform.OS === 'android' ? rs.size(-2) : 0,
+    fontSize: rs.font(14),
+    textAlign: 'center',
+    includeFontPadding: false,
+  },
+  balanceIconTextFocused: {
+    color: '#FFFFFF',
+  },
+  balanceIconNaira: {
+    fontFamily: Fonts.semibold,
+    color: '#FF6500',
   },
 });

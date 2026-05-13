@@ -1,9 +1,10 @@
 // lib/api/axios.ts
 import axios, { type AxiosError, type InternalAxiosRequestConfig } from 'axios';
 
-import { getStore } from './store-ref';
+import { dispatchLogout, getStore } from './store-ref';
 
-export const API_BASE_URL = 'https://wahala-ce1p.onrender.com';
+export const API_BASE_URL =
+  process.env.EXPO_PUBLIC_API_URL ?? 'https://wahala-ce1p.onrender.com';
 
 export const api = axios.create({
   baseURL: API_BASE_URL,
@@ -24,13 +25,7 @@ api.interceptors.response.use(
   (response) => response,
   (error: AxiosError) => {
     if (error.response?.status === 401) {
-      const store = getStore();
-      // Dynamic require to avoid the circular import: store -> slices -> api -> store.
-      if (store) {
-        // eslint-disable-next-line @typescript-eslint/no-require-imports
-        const { logout } = require('@/features/auth/store/auth-slice');
-        store.dispatch(logout());
-      }
+      dispatchLogout();
     }
     return Promise.reject(error);
   }

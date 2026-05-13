@@ -4,15 +4,50 @@ import { StyleSheet, View, Text } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import { Fonts } from '@/constants/fonts';
 import { rs } from '@/utils/responsive';
-import { Market } from '@/data/placeholder';
-import { AvatarStack } from './AvatarStack';
+import {
+  type Market,
+  type Outcome,
+  formatClosesIn,
+  formatPoolKobo,
+  getMostPicked,
+  getOutcomeMultiplier,
+  getOutcomePercent,
+  getUnderdog,
+  hasPool,
+} from '@/utils/market';
 
 interface MarketCardFullProps {
   market: Market;
 }
 
+type DisplayOutcome = {
+  outcome: Outcome;
+  tag: 'MOST PICKED' | 'UNDERDOG' | null;
+};
+
+function pickDisplayOutcomes(market: Market): DisplayOutcome[] {
+  if (!market.outcomes || market.outcomes.length === 0) return [];
+
+  if (!hasPool(market.totalPoolKobo)) {
+    // No bets yet — show all outcomes, label only, no tags.
+    return market.outcomes.map((outcome) => ({ outcome, tag: null }));
+  }
+
+  const top = getMostPicked(market.outcomes);
+  const under = getUnderdog(market.outcomes);
+  return market.outcomes.map((outcome) => {
+    if (top && outcome.id === top.id) return { outcome, tag: 'MOST PICKED' as const };
+    if (under && outcome.id === under.id && (!top || under.id !== top.id))
+      return { outcome, tag: 'UNDERDOG' as const };
+    return { outcome, tag: null };
+  });
+}
+
 export const MarketCardFull: React.FC<MarketCardFullProps> = ({ market }) => {
-  const trending = market.badges.includes('TRENDING');
+  const trending = market.featured;
+  const poolExists = hasPool(market.totalPoolKobo);
+  const display = pickDisplayOutcomes(market);
+  const closesLabel = formatClosesIn(market.closesAt);
 
   return (
     <View style={styles.container}>
@@ -20,7 +55,7 @@ export const MarketCardFull: React.FC<MarketCardFullProps> = ({ market }) => {
       <View style={styles.header}>
         <View style={styles.tags}>
           <View style={styles.categoryTag}>
-            <Text style={styles.categoryText}>{market.category}</Text>
+            <Text style={styles.categoryText}>{market.category.toUpperCase()}</Text>
           </View>
           {trending && (
             <View style={styles.trendingTag}>
@@ -30,7 +65,7 @@ export const MarketCardFull: React.FC<MarketCardFullProps> = ({ market }) => {
         </View>
         <View style={styles.closesIn}>
           <Feather name="clock" size={rs.font(11)} color="#888888" />
-          <Text style={styles.closesInText}>Closes {market.closesIn}</Text>
+          <Text style={styles.closesInText}>{closesLabel}</Text>
         </View>
       </View>
 
@@ -38,30 +73,45 @@ export const MarketCardFull: React.FC<MarketCardFullProps> = ({ market }) => {
       <Text style={styles.question}>{market.question}</Text>
 
       {/* Outcome boxes */}
-      <View style={styles.outcomes}>
-        {market.outcomes.map((outcome, index) => {
-          const isFirst = index === 0;
+      <View style={[styles.outcomes, display.length > 2 && styles.outcomesGrid]}>
+        {display.map(({ outcome, tag }) => {
+          const percent = poolExists
+            ? getOutcomePercent(outcome.totalStakedKobo, market.totalPoolKobo)
+            : null;
+          const multiplier = poolExists
+            ? getOutcomeMultiplier(outcome.totalStakedKobo, market.totalPoolKobo)
+            : null;
+          const bg =
+            tag === 'MOST PICKED'
+              ? '#1E3A2F'
+              : tag === 'UNDERDOG'
+                ? '#2A1A2E'
+                : '#1E1E1E';
+          const tagColor =
+            tag === 'MOST PICKED' ? '#4CAF50' : tag === 'UNDERDOG' ? '#CE93D8' : '#888888';
           return (
             <View
-              key={index}
+              key={outcome.id}
               style={[
                 styles.outcomeBox,
-                { backgroundColor: isFirst ? '#1E3A2F' : '#2A1A2E' },
+                display.length > 2 && styles.outcomeBoxGrid,
+                { backgroundColor: bg },
               ]}
             >
-              <Text
-                style={[
-                  styles.outcomeTag,
-                  { color: isFirst ? '#4CAF50' : '#CE93D8' },
-                ]}
-              >
-                {outcome.tag}
-              </Text>
+              {poolExists && tag && (
+                <Text style={[styles.outcomeTag, { color: tagColor }]}>{tag}</Text>
+              )}
               <Text style={styles.outcomeLabel}>{outcome.label}</Text>
-              <View style={styles.outcomeFooter}>
-                <Text style={styles.percentText}>{outcome.percent}%</Text>
-                <Text style={styles.multiplierText}>{outcome.multiplier}x</Text>
-              </View>
+              {poolExists && (
+                <View style={styles.outcomeFooter}>
+                  {percent !== null && (
+                    <Text style={styles.percentText}>{percent}%</Text>
+                  )}
+                  {multiplier !== null && (
+                    <Text style={styles.multiplierText}>{multiplier}x</Text>
+                  )}
+                </View>
+              )}
             </View>
           );
         })}
@@ -69,12 +119,15 @@ export const MarketCardFull: React.FC<MarketCardFullProps> = ({ market }) => {
 
       {/* Pool row */}
       <View style={styles.poolRow}>
-        <View style={styles.poolLeft}>
-          <AvatarStack colors={market.avatarColors} extra={market.extraAvatars} />
-          <View style={styles.poolInfo}>
-            <Text style={styles.poolAmount}>{market.poolAmount}</Text>
-            <Text style={styles.poolLabel}> pool</Text>
-          </View>
+        <View style={styles.poolInfo}>
+          {poolExists ? (
+            <>
+              <Text style={styles.poolAmount}>{formatPoolKobo(market.totalPoolKobo)}</Text>
+              <Text style={styles.poolLabel}> pool</Text>
+            </>
+          ) : (
+            <Text style={styles.firstStake}>Be the first to stake</Text>
+          )}
         </View>
         <View style={styles.comments}>
           <Feather name="message-square" size={rs.font(13)} color="#888888" />
@@ -88,13 +141,20 @@ export const MarketCardFull: React.FC<MarketCardFullProps> = ({ market }) => {
           <View style={styles.accentBar} />
           <View style={styles.commentContent}>
             <View style={styles.commentHeader}>
-              <Text style={styles.username}>{market.lastComment.username}</Text>
-              <View style={styles.commentBadge}>
-                <Text style={styles.commentBadgeText}>{market.lastComment.badge}</Text>
-              </View>
+              <Text style={styles.username}>
+                @{market.lastComment.username}
+              </Text>
+              {market.lastComment.outcomeBetOn && (
+                <View style={styles.commentBadge}>
+                  <Text style={styles.commentBadgeText}>
+                    {market.lastComment.displayName ?? market.lastComment.username} ·{' '}
+                    {market.lastComment.outcomeBetOn}
+                  </Text>
+                </View>
+              )}
             </View>
             <Text style={styles.commentText} numberOfLines={2}>
-              {market.lastComment.text}
+              {market.lastComment.body}
             </Text>
           </View>
         </View>
@@ -164,10 +224,17 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: rs.size(8),
   },
+  outcomesGrid: {
+    flexWrap: 'wrap',
+  },
   outcomeBox: {
     flex: 1,
     borderRadius: rs.size(12),
     padding: rs.size(12),
+  },
+  outcomeBoxGrid: {
+    flexBasis: '48%',
+    flexGrow: 1,
   },
   outcomeTag: {
     fontFamily: Fonts.semibold,
@@ -211,6 +278,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginLeft: rs.size(8),
   },
+  poolInfoNoAvatars: {
+    marginLeft: 0,
+  },
   poolAmount: {
     fontFamily: Fonts.bold,
     fontSize: rs.font(13),
@@ -220,6 +290,11 @@ const styles = StyleSheet.create({
     fontFamily: Fonts.regular,
     fontSize: rs.font(13),
     color: '#888888',
+  },
+  firstStake: {
+    fontFamily: Fonts.medium,
+    fontSize: rs.font(13),
+    color: '#FF6500',
   },
   comments: {
     flexDirection: 'row',
