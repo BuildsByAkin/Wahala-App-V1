@@ -22,7 +22,8 @@ export type PlaceBetResult = {
   outcome: {
     totalPoolKobo: string;
     bettorCount: number;
-    multiplier: number;
+    // null when the outcome has zero pool.
+    multiplier: number | null;
   };
   wallet: {
     availableKobo: string;
@@ -42,7 +43,8 @@ export type MyBet = {
   stakeKobo: string;
   payoutKobo: string | null;
   status: BetStatus;
-  multiplier: number;
+  // null when the outcome has zero pool at the time the bet was serialized.
+  multiplier: number | null;
   displayMode: DisplayMode;
   createdAt: string;
 };
@@ -74,4 +76,17 @@ export const bettingApi = {
     if ('data' in data && Array.isArray(data.data)) return data.data;
     return [];
   },
+
+  getMyBetsSummary: async (): Promise<MyBetsSummary> => {
+    const { data } = await api.get<MyBetsSummary>('/me/bets/summary');
+    return {
+      activeStakeKobo: data?.activeStakeKobo ?? '0',
+      activeCount: data?.activeCount ?? 0,
+    };
+  },
+};
+
+export type MyBetsSummary = {
+  activeStakeKobo: string;
+  activeCount: number;
 };

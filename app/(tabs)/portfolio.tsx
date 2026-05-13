@@ -21,8 +21,8 @@ import {
   HistoryRow,
   PositionRow,
   groupBetsIntoPositions,
-  sumStakesKobo,
   useMyBets,
+  useMyBetsSummary,
 } from '@/features/betting';
 import { DepositSheet } from '@/features/deposits';
 import * as Haptics from 'expo-haptics';
@@ -46,15 +46,25 @@ export default function PortfolioScreen() {
   const [active, setActive] = useState<TabKey>('open');
   const [depositOpen, setDepositOpen] = useState(false);
 
-  // Always fetch active bets so the "Positions" stat stays accurate even when
-  // the History tab is foregrounded; React Query dedupes between the two hooks.
-  const activeQuery = useMyBets({ status: 'active', limit: 50 });
-  // History fetches the unfiltered feed and we keep settled rows client-side —
-  // the API only accepts one status at a time, so this avoids two round trips.
+  // Active bets only loaded when the Open tab is foregrounded — the Positions
+  // stat is fed by the lightweight /me/bets/summary endpoint instead so we
+  // don't drag down the full list on every History view.
+  const activeQuery = useMyBets({
+    status: 'active',
+    limit: 50,
+    enabled: active === 'open',
+  });
   const historyQuery = useMyBets({
+    status: 'won',
     enabled: active === 'history',
     limit: 50,
   });
+  const lostQuery = useMyBets({
+    status: 'lost',
+    enabled: active === 'history',
+    limit: 50,
+  });
+  const summaryQuery = useMyBetsSummary();
 
   const positions = useMemo(
     () => groupBetsIntoPositions(activeQuery.bets),
@@ -63,13 +73,11 @@ export default function PortfolioScreen() {
 
   // History feed = settled bets only, newest first.
   const historyBets = useMemo(() => {
-    return [...historyQuery.bets]
-      .filter((b) => b.status === 'won' || b.status === 'lost')
-      .sort(
-        (a, b) =>
-          new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-      );
-  }, [historyQuery.bets]);
+    return [...historyQuery.bets, ...lostQuery.bets].sort(
+      (a, b) =>
+        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    );
+  }, [historyQuery.bets, lostQuery.bets]);
 
   const handle = username || displayName || 'you';
   const initials = useMemo(
@@ -77,10 +85,7 @@ export default function PortfolioScreen() {
     [displayName, username]
   );
 
-  const positionsKobo = useMemo(
-    () => sumStakesKobo(activeQuery.bets),
-    [activeQuery.bets]
-  );
+  const positionsKobo = summaryQuery.activeStakeKobo;
 
   const totalLabel = formatKoboAsCompactNaira(walletAvailableKobo);
   const cashLabel = formatKoboAsCompactNaira(walletAvailableKobo);
@@ -89,11 +94,18 @@ export default function PortfolioScreen() {
   const changeLabel = '₦0 (0%)';
 
   const isRefreshing =
-    active === 'open' ? activeQuery.isRefetching : historyQuery.isRefetching;
+    active === 'open'
+      ? activeQuery.isRefetching
+      : historyQuery.isRefetching || lostQuery.isRefetching;
 
   const onRefresh = () => {
-    activeQuery.refetch();
-    if (active === 'history') historyQuery.refetch();
+    summaryQuery.refetch();
+    if (active === 'open') {
+      activeQuery.refetch();
+    } else {
+      historyQuery.refetch();
+      lostQuery.refetch();
+    }
   };
 
   // The list payload depends on the active tab. We unify into an opaque row
@@ -122,9 +134,12 @@ export default function PortfolioScreen() {
           onRetry: activeQuery.refetch,
         }
       : {
-          isLoading: historyQuery.isLoading,
-          isError: historyQuery.isError,
-          onRetry: historyQuery.refetch,
+          isLoading: historyQuery.isLoading || lostQuery.isLoading,
+          isError: historyQuery.isError || lostQuery.isError,
+          onRetry: () => {
+            historyQuery.refetch();
+            lostQuery.refetch();
+          },
         };
 
   const ListHeader = (

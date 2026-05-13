@@ -15,7 +15,18 @@ export type LastComment = {
   outcomeBetOn: string | null;
 } | null;
 
-export type MarketStatus = 'open' | 'draft' | 'closed' | 'resolved';
+// Lifecycle is driven server-side: scheduled → open → locked → resolved/cancelled.
+// `voided` is an internal terminal state for edge resolutions. The backend
+// applies an effective status at serialize time, so by the time we read
+// `status` here it already reflects the live state (e.g. a market past its
+// `closesAt` will report `locked` even within the cron lag).
+export type MarketStatus =
+  | 'scheduled'
+  | 'open'
+  | 'locked'
+  | 'resolved'
+  | 'cancelled'
+  | 'voided';
 
 export type Market = {
   id: string;
@@ -204,4 +215,31 @@ export const OUTCOME_PALETTE = [
 
 export function outcomeColor(index: number): string {
   return OUTCOME_PALETTE[index % OUTCOME_PALETTE.length];
+}
+
+export const BINARY_COLOR_SCHEMES = [
+  ['#22C55E', '#EF4444'] as const,
+  ['#3B82F6', '#F97316'] as const,
+  ['#8B5CF6', '#EC4899'] as const,
+  ['#06B6D4', '#F59E0B'] as const,
+  ['#10B981', '#A855F7'] as const,
+  ['#F43F5E', '#38BDF8'] as const,
+] as const;
+
+export type BinaryScheme = readonly [string, string];
+
+export function getCardSchemeColors(marketId: string): BinaryScheme {
+  const cleaned = (marketId ?? '').replace(/[^a-z0-9]/gi, '');
+  if (cleaned.length === 0) return BINARY_COLOR_SCHEMES[0];
+  let hash = 0;
+  for (let i = 0; i < cleaned.length; i++) {
+    hash = (hash * 31 + cleaned.charCodeAt(i)) >>> 0;
+  }
+  return BINARY_COLOR_SCHEMES[hash % BINARY_COLOR_SCHEMES.length];
+}
+
+export function isClosingSoon(closesAt: string): boolean {
+  const target = new Date(closesAt).getTime();
+  if (Number.isNaN(target)) return false;
+  return target - Date.now() < 24 * 60 * 60 * 1000;
 }

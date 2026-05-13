@@ -8,22 +8,17 @@ import { rs } from '@/utils/responsive';
 import { useAuth, useMe } from '@/features/auth';
 import { formatKoboAsCompactNaira } from '@/lib/utils/money';
 
-function PortfolioBalanceIcon({ color, focused }: { color: string; focused: boolean }) {
+function PortfolioBalanceIcon({ focused }: { color: string; focused: boolean }) {
   const { walletAvailableKobo } = useAuth();
   const balance = formatKoboAsCompactNaira(walletAvailableKobo);
   return (
-    <View style={styles.balanceIconWrap}>
+    <View style={styles.portfolioIconWrap}>
       <Text
         numberOfLines={1}
         adjustsFontSizeToFit
-        style={[
-          styles.balanceIconText,
-          { color },
-          focused && styles.balanceIconTextFocused,
-        ]}
+        style={[styles.balanceText, focused && styles.balanceTextFocused]}
       >
-        <Text style={styles.balanceIconNaira}>₦</Text>
-        {balance}
+        ₦{balance}
       </Text>
     </View>
   );
@@ -41,7 +36,7 @@ export default function TabLayout() {
       screenOptions={{
         headerShown: false,
         tabBarActiveTintColor: '#FFFFFF',
-        tabBarInactiveTintColor: '#555555',
+        tabBarInactiveTintColor: '#777777',
         tabBarStyle: {
           backgroundColor: '#111111',
           borderTopColor: '#1F1F1F',
@@ -84,25 +79,20 @@ export default function TabLayout() {
 }
 
 const styles = StyleSheet.create({
-  balanceIconWrap: {
-    minWidth: rs.size(40),
-    maxWidth: rs.size(72),
-    height: rs.size(24),
+  portfolioIconWrap: {
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: rs.size(4),
+    minWidth: rs.size(44),
+    height: rs.size(28),
+    paddingHorizontal: rs.size(6),
   },
-  balanceIconText: {
+  balanceText: {
     fontFamily: Fonts.bold,
-    fontSize: rs.font(14),
-    textAlign: 'center',
+    fontSize: rs.font(13),
+    color: '#777777',
     includeFontPadding: false,
   },
-  balanceIconTextFocused: {
+  balanceTextFocused: {
     color: '#FFFFFF',
-  },
-  balanceIconNaira: {
-    fontFamily: Fonts.semibold,
-    color: '#FF6500',
   },
 });

@@ -14,7 +14,8 @@ export type Position = {
   // Number of "add money" actions, useful to surface in the UI.
   entryCount: number;
   // The freshest multiplier we have for this outcome (last bet wins).
-  latestMultiplier: number;
+  // null when the outcome has zero pool — render "—".
+  latestMultiplier: number | null;
   // ISO of the most recent bet, used for sort.
   lastBetAt: string;
 };
@@ -62,16 +63,16 @@ export function groupBetsIntoPositions(bets: MyBet[]): Position[] {
 }
 
 // stake * multiplier with 4-decimal precision via BigInt micro-units.
-// Guards against the multiplier being NaN / Infinity (which the API can return
-// before any liquidity exists on an outcome) — `BigInt(Math.round(NaN))` and
-// `BigInt(Math.round(Infinity))` both throw RangeError.
+// Multiplier may be `null` (no liquidity yet), `NaN`, `Infinity`, or <= 0 —
+// in any of those cases we return the stake unchanged. `BigInt(Math.round(NaN))`
+// and `BigInt(Math.round(Infinity))` both throw RangeError, hence the guard.
 export function estimatePayoutKobo(
   stakeKoboString: string,
-  multiplier: number
+  multiplier: number | null
 ): string {
   const stake = safeBigInt(stakeKoboString);
   if (stake <= 0n) return '0';
-  if (!Number.isFinite(multiplier) || multiplier <= 0) {
+  if (multiplier === null || !Number.isFinite(multiplier) || multiplier <= 0) {
     return stake.toString();
   }
   const micro = BigInt(Math.round(multiplier * 10_000));

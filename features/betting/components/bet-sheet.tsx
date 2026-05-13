@@ -22,7 +22,10 @@ import { formatKoboAsNaira } from '@/lib/utils/money';
 import { useAppSelector } from '@/store';
 
 import type { DetailOutcome, MarketDetail } from '@/hooks/useMarket';
-import { usePlaceBet } from '@/features/betting/hooks/use-place-bet';
+import {
+  usePlaceBet,
+  type PlaceBetErrorCode,
+} from '@/features/betting/hooks/use-place-bet';
 import type { DisplayMode } from '@/features/betting/api/betting-api';
 
 type Props = {
@@ -30,6 +33,10 @@ type Props = {
   market: MarketDetail | null;
   outcome: DetailOutcome | null;
   outcomeIndex: number;
+  // Total amount the user has already staked on THIS outcome (kobo string),
+  // null/undefined if they haven't bet on it yet. When > 0 we render an
+  // "Adding to your stake" banner and switch the CTA copy to "Add to stake".
+  myStakeKoboOnOutcome?: string | null;
   onClose: () => void;
 };
 
@@ -41,6 +48,7 @@ export function BetSheet({
   market,
   outcome,
   outcomeIndex,
+  myStakeKoboOnOutcome,
   onClose,
 }: Props) {
   const translateY = useRef(new Animated.Value(400)).current;
@@ -133,10 +141,15 @@ export function BetSheet({
 
   // Estimated payout = stake * live multiplier. For preview only — server is
   // authoritative once the market resolves. We do bigint math via micro-units
-  // so the multiplier (a JS number) keeps 4 decimals of precision.
+  // so the multiplier (a JS number) keeps 4 decimals of precision. The API
+  // returns `multiplier: null` for a zero-pool outcome — in that case we just
+  // echo the stake as the floor estimate.
   const estimatedPayoutKobo = useMemo(() => {
     if (!outcome || stakeKobo === null || stakeKobo <= 0n) return null;
-    const micro = BigInt(Math.round(outcome.multiplier * 10_000));
+    const m = outcome.multiplier;
+    if (m === null || !Number.isFinite(m) || m <= 0) return stakeKobo;
+    const micro = BigInt(Math.round(m * 10_000));
+    if (micro <= 0n) return stakeKobo;
     return (stakeKobo * micro) / 10_000n;
   }, [outcome, stakeKobo]);
 
@@ -163,6 +176,13 @@ export function BetSheet({
 
   const showSuccess = !!result && !error;
 
+  const existingStakeKobo = useMemo(
+    () => safeBigInt(myStakeKoboOnOutcome ?? null),
+    [myStakeKoboOnOutcome]
+  );
+  const isAddingToStake =
+    existingStakeKobo !== null && existingStakeKobo > 0n;
+
   return (
     <Modal
       visible={visible}
@@ -184,6 +204,22 @@ export function BetSheet({
         <Animated.View style={[styles.sheet, { transform: [{ translateY }] }]}>
           <View style={styles.handle} />
 
+          {/* Always-visible close button — backdrop tap also closes, but a
+              keyboard or focused input can occlude it on small devices, so we
+              also surface an explicit affordance in the top-right. */}
+          <Pressable
+            onPress={onClose}
+            accessibilityRole="button"
+            accessibilityLabel="Close"
+            hitSlop={12}
+            style={({ pressed }) => [
+              styles.closeBtn,
+              pressed && { opacity: 0.7 },
+            ]}
+          >
+            <Feather name="x" size={rs.font(18)} color="#888888" />
+          </Pressable>
+
           {showSuccess ? (
             <SuccessView
               color={color}
@@ -197,7 +233,9 @@ export function BetSheet({
             <>
               <View style={styles.headerRow}>
                 <View style={[styles.dot, { backgroundColor: color }]} />
-                <Text style={styles.eyebrow}>STAKING ON</Text>
+                <Text style={styles.eyebrow}>
+                  {isAddingToStake ? 'ADDING TO' : 'STAKING ON'}
+                </Text>
               </View>
               <Text style={styles.outcomeLabel} numberOfLines={2}>
                 {outcome?.label ?? ''}
@@ -209,13 +247,51 @@ export function BetSheet({
                   <Sep />
                   <Stat
                     label="PAYOUT"
-                    value={`${outcome.multiplier}x`}
+                    value={
+                      outcome.multiplier !== null
+                        ? `${outcome.multiplier}x`
+                        : '—'
+                    }
                     valueColor={color}
                   />
                   <Sep />
                   <Stat label="STAKERS" value={String(outcome.bettorCount)} />
                 </View>
               )}
+
+              {isAddingToStake && existingStakeKobo !== null ? (
+                <View
+                  style={[
+                    styles.existingBanner,
+                    {
+                      backgroundColor: `${color}14`,
+                      borderColor: `${color}40`,
+                    },
+                  ]}
+                >
+                  <View
+                    style={[
+                      styles.existingBadge,
+                      { backgroundColor: `${color}26` },
+                    ]}
+                  >
+                    <Feather
+                      name="check"
+                      size={rs.font(12)}
+                      color={color}
+                    />
+                  </View>
+                  <View style={styles.existingTextWrap}>
+                    <Text style={styles.existingLabel}>You&apos;re already in</Text>
+                    <Text style={styles.existingValue}>
+                      Current stake ·{' '}
+                      <Text style={[styles.existingValueStrong, { color }]}>
+                        ₦{formatKoboAsNaira(existingStakeKobo.toString())}
+                      </Text>
+                    </Text>
+                  </View>
+                </View>
+              ) : null}
 
               <View style={styles.walletRow}>
                 <Text style={styles.walletLabel}>Available</Text>
@@ -309,14 +385,16 @@ export function BetSheet({
               </View>
 
               {(error || validation.reason) && (
-                <View style={styles.errorBox}>
+                <View style={styles.noticeBox}>
                   <Feather
-                    name="alert-circle"
+                    name="info"
                     size={rs.font(14)}
-                    color="#FF5A5A"
+                    color="#FFB066"
                   />
-                  <Text style={styles.errorText}>
-                    {error?.message ?? validation.reason}
+                  <Text style={styles.noticeText}>
+                    {error
+                      ? friendlyErrorMessage(error.code, error.message)
+                      : validation.reason}
                   </Text>
                 </View>
               )}
@@ -336,7 +414,11 @@ export function BetSheet({
                 ]}
               >
                 <Text style={styles.submitText}>
-                  {isPlacing ? 'Placing…' : 'Place stake'}
+                  {isPlacing
+                    ? 'Placing…'
+                    : isAddingToStake
+                    ? 'Add to stake'
+                    : 'Place stake'}
                 </Text>
               </Pressable>
             </>
@@ -382,7 +464,7 @@ function SuccessView({
   color: string;
   outcomeLabel: string;
   stakeKobo: string;
-  multiplier: number;
+  multiplier: number | null;
   alreadyPlaced: boolean;
   onClose: () => void;
 }) {
@@ -399,7 +481,9 @@ function SuccessView({
         <Text style={[styles.successOutcome, { color }]}>{outcomeLabel}</Text>
       </Text>
       <Text style={styles.successMultiplier}>
-        Live multiplier: {multiplier}x
+        {multiplier !== null
+          ? `Live multiplier: ${multiplier}x`
+          : 'Live multiplier: — (waiting for liquidity)'}
       </Text>
       <Pressable
         onPress={onClose}
@@ -407,7 +491,8 @@ function SuccessView({
         accessibilityLabel="Done"
         style={({ pressed }) => [
           styles.submit,
-          { backgroundColor: color, opacity: pressed ? 0.85 : 1, marginTop: rs.size(20) },
+          styles.successDoneBtn,
+          { backgroundColor: color, opacity: pressed ? 0.85 : 1 },
         ]}
       >
         <Text style={styles.submitText}>Done</Text>
@@ -424,6 +509,25 @@ function safeBigInt(v: string | null | undefined): bigint | null {
     return BigInt(v);
   } catch {
     return null;
+  }
+}
+
+function friendlyErrorMessage(code: PlaceBetErrorCode, fallback: string): string {
+  switch (code) {
+    case 'already_bet_on_different_outcome':
+      return "You're already in on another side here — you can only add to that bet.";
+    case 'insufficient_funds':
+      return 'Not enough money in your wallet. Top up to keep going.';
+    case 'market_closed':
+      return 'This market just closed — no more bets.';
+    case 'stake_too_low':
+      return 'That stake is below the minimum for this market.';
+    case 'stake_too_high':
+      return 'That stake is above the maximum for this market.';
+    case 'unauthorized':
+      return 'Please sign in again to place this bet.';
+    default:
+      return fallback;
   }
 }
 
@@ -464,6 +568,18 @@ const styles = StyleSheet.create({
     borderRadius: rs.size(3),
     backgroundColor: '#2A2A2A',
     marginBottom: rs.size(20),
+  },
+  closeBtn: {
+    position: 'absolute',
+    top: rs.size(14),
+    right: rs.size(14),
+    width: rs.size(32),
+    height: rs.size(32),
+    borderRadius: rs.size(16),
+    backgroundColor: '#1A1A1A',
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 2,
   },
 
   headerRow: {
@@ -617,21 +733,58 @@ const styles = StyleSheet.create({
     color: '#888888',
   },
 
-  errorBox: {
+  noticeBox: {
     marginTop: rs.size(14),
     flexDirection: 'row',
     alignItems: 'center',
     gap: rs.size(8),
-    backgroundColor: '#1A0A0A',
+    backgroundColor: '#1A1208',
+    borderWidth: 1,
+    borderColor: '#2A1F10',
     borderRadius: rs.size(12),
     paddingHorizontal: rs.size(12),
     paddingVertical: rs.size(10),
   },
-  errorText: {
+  noticeText: {
     flex: 1,
     fontFamily: Fonts.regular,
     fontSize: rs.font(12),
-    color: '#FF8A8A',
+    lineHeight: rs.font(17),
+    color: '#E0B58A',
+  },
+
+  existingBanner: {
+    marginTop: rs.size(14),
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: rs.size(10),
+    borderRadius: rs.size(14),
+    borderWidth: 1,
+    paddingHorizontal: rs.size(12),
+    paddingVertical: rs.size(10),
+  },
+  existingBadge: {
+    width: rs.size(24),
+    height: rs.size(24),
+    borderRadius: rs.size(12),
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  existingTextWrap: { flex: 1 },
+  existingLabel: {
+    fontFamily: Fonts.semibold,
+    fontSize: rs.font(11),
+    color: '#FFFFFF',
+    letterSpacing: 0.4,
+  },
+  existingValue: {
+    marginTop: rs.size(2),
+    fontFamily: Fonts.regular,
+    fontSize: rs.font(12),
+    color: '#999999',
+  },
+  existingValueStrong: {
+    fontFamily: Fonts.bold,
   },
 
   submit: {
@@ -640,6 +793,15 @@ const styles = StyleSheet.create({
     borderRadius: rs.size(26),
     alignItems: 'center',
     justifyContent: 'center',
+    flexDirection: 'row',
+  },
+  // Inside the centered SuccessView the submit button would otherwise shrink
+  // to fit its text (because the parent has `alignItems: 'center'`). Force it
+  // to span the sheet width so the pill matches the primary CTA elsewhere.
+  successDoneBtn: {
+    alignSelf: 'stretch',
+    marginTop: rs.size(24),
+    paddingHorizontal: rs.size(32),
   },
   submitText: {
     fontFamily: Fonts.bold,

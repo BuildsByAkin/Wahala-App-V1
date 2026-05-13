@@ -21,6 +21,7 @@ export const betKeys = {
   all: ['bets'] as const,
   myBets: (filters: { status?: string; limit?: number; offset?: number }) =>
     [...betKeys.all, 'mine', filters] as const,
+  mySummary: () => [...betKeys.all, 'mine', 'summary'] as const,
 };
 
 export const depositKeys = {

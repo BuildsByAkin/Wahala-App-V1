@@ -71,7 +71,9 @@ export default function HomeScreen() {
 
   const { markets, isLoading, isError, refetch, isRefetching } = useMarkets();
 
-  // Filter to only open markets — never trust backend to exclude drafts.
+  // Backend already returns only effectively-open markets (drafts removed,
+  // scheduled-but-past-opensAt rolled into open). This filter is a defensive
+  // belt-and-braces — accept anything the API hands us as effective `open`.
   const openMarkets = useMemo(
     () => markets.filter((m) => m.status === 'open'),
     [markets]

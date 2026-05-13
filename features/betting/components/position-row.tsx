@@ -37,7 +37,11 @@ export function PositionRow({ position }: Props) {
         <Text style={styles.outcomeLabel} numberOfLines={1}>
           {position.outcomeLabel}
         </Text>
-        <Text style={styles.multiplier}>{position.latestMultiplier}x</Text>
+        <Text style={styles.multiplier}>
+          {position.latestMultiplier !== null
+            ? `${position.latestMultiplier}x`
+            : '—'}
+        </Text>
       </View>
 
       <View style={styles.statsRow}>

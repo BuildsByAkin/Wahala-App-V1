@@ -64,8 +64,10 @@ export function HistoryRow({ bet }: Props) {
       </View>
 
       <Text style={styles.outcomeLine} numberOfLines={1}>
-        {bet.outcomeLabel}{' '}
-        <Text style={styles.dim}>· {bet.multiplier}x</Text>
+        {bet.outcomeLabel}
+        {bet.multiplier !== null ? (
+          <Text style={styles.dim}> · {bet.multiplier}x</Text>
+        ) : null}
       </Text>
 
       <View style={styles.metaRow}>

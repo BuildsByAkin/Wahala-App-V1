@@ -1,6 +1,7 @@
 // app/market/[slug].tsx
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
   Alert,
   Animated,
   Easing,
@@ -22,13 +23,19 @@ import { useToggleLike } from '@/hooks/useToggleLike';
 import {
   formatClosesIn,
   getAvatarColor,
+  getCardSchemeColors,
   getInitial,
   outcomeColor,
   timeAgo,
 } from '@/utils/market';
 import { formatKoboAsNaira } from '@/lib/utils/money';
 import { useAuth } from '@/features/auth';
-import { BetSheet } from '@/features/betting';
+import {
+  BetSheet,
+  LockedNoticeSheet,
+  groupBetsIntoPositions,
+  useMyBets,
+} from '@/features/betting';
 
 function leadingOutcomeIndex(outcomes: DetailOutcome[]): number {
   if (outcomes.length === 0) return -1;
@@ -121,7 +128,15 @@ function SkeletonBody() {
   );
 }
 
-function SplitBar({ outcomes, poolExists }: { outcomes: DetailOutcome[]; poolExists: boolean }) {
+function SplitBar({
+  outcomes,
+  poolExists,
+  colors,
+}: {
+  outcomes: DetailOutcome[];
+  poolExists: boolean;
+  colors?: string[];
+}) {
   const totalPct = outcomes.reduce((sum, o) => sum + Math.max(0, o.sharePercent), 0);
   if (!poolExists || outcomes.length === 0 || totalPct <= 0) {
     return <View style={[styles.splitBar, styles.splitBarNeutral]} />;
@@ -134,7 +149,7 @@ function SplitBar({ outcomes, poolExists }: { outcomes: DetailOutcome[]; poolExi
         return (
           <View
             key={o.id}
-            style={{ flex: pct, backgroundColor: outcomeColor(i) }}
+            style={{ flex: pct, backgroundColor: colors?.[i] ?? outcomeColor(i) }}
           />
         );
       })}
@@ -148,14 +163,21 @@ function OutcomeRow({
   isLeading,
   poolExists,
   onPress,
+  color,
+  myStakeKobo,
+  isOtherLocked,
 }: {
   outcome: DetailOutcome;
   index: number;
   isLeading: boolean;
   poolExists: boolean;
   onPress: (outcome: DetailOutcome, index: number) => void;
+  color: string;
+  // Total amount this user has on THIS outcome (kobo string), or null.
+  myStakeKobo: string | null;
+  // True when the user is locked into a DIFFERENT outcome on this market.
+  isOtherLocked: boolean;
 }) {
-  const color = outcomeColor(index);
   const scale = useRef(new Animated.Value(1)).current;
 
   const handlePressIn = () => {
@@ -175,28 +197,102 @@ function OutcomeRow({
     }).start();
   };
 
+  const isMine = !!myStakeKobo;
+
+  // Container styling cascades: mine > leading > default. Locked-other is
+  // intentionally low-key (no red) — the row stays tappable so users can
+  // open the friendly notice sheet.
+  const containerExtra = isMine
+    ? { borderColor: `${color}88`, backgroundColor: `${color}14` }
+    : isOtherLocked
+    ? { borderColor: '#161616', backgroundColor: '#0C0C0C' }
+    : isLeading
+    ? { borderColor: `${color}44`, backgroundColor: `${color}0D` }
+    : null;
+
+  // Right-side action chip swaps based on user state.
+  const renderActionChip = () => {
+    if (isMine) {
+      return (
+        <View
+          style={[
+            styles.stakeChip,
+            { backgroundColor: color, borderColor: color },
+          ]}
+        >
+          <Feather name="plus" size={rs.font(12)} color="#0A0A0A" />
+          <Text style={[styles.stakeChipText, { color: '#0A0A0A' }]}>ADD</Text>
+        </View>
+      );
+    }
+    if (isOtherLocked) {
+      return (
+        <View style={styles.lockedChip}>
+          <Feather name="lock" size={rs.font(11)} color="#666666" />
+          <Text style={styles.lockedChipText}>LOCKED</Text>
+        </View>
+      );
+    }
+    return (
+      <View
+        style={[
+          styles.stakeChip,
+          { backgroundColor: `${color}1A`, borderColor: `${color}55` },
+        ]}
+      >
+        <Text style={[styles.stakeChipText, { color }]}>STAKE</Text>
+        <Feather name="chevron-right" size={rs.font(14)} color={color} />
+      </View>
+    );
+  };
+
+  const accessibilityLabel = isMine
+    ? `Add to your stake on ${outcome.label}`
+    : isOtherLocked
+    ? `Locked — you already staked on a different option`
+    : `Stake on ${outcome.label}`;
+
   return (
     <Pressable
       onPress={() => onPress(outcome, index)}
       onPressIn={handlePressIn}
       onPressOut={handlePressOut}
       accessibilityRole="button"
-      accessibilityLabel={`Stake on ${outcome.label}`}
-      accessibilityHint="Opens the betting sheet"
+      accessibilityLabel={accessibilityLabel}
+      accessibilityHint={
+        isOtherLocked
+          ? 'Opens a notice explaining your existing stake'
+          : 'Opens the betting sheet'
+      }
     >
       <Animated.View
         style={[
           styles.outcomeRow,
-          isLeading && styles.outcomeRowLeading,
+          containerExtra,
+          isOtherLocked && { opacity: 0.55 },
           { transform: [{ scale }] },
         ]}
       >
         <View style={[styles.outcomeAccent, { backgroundColor: color }]} />
         <View style={styles.outcomeLeftWrap}>
           <View style={[styles.outcomeDot, { backgroundColor: color }]} />
-          <Text style={styles.outcomeLabel} numberOfLines={1}>
-            {outcome.label}
-          </Text>
+          <View style={styles.outcomeLabelWrap}>
+            <Text style={styles.outcomeLabel} numberOfLines={1}>
+              {outcome.label}
+            </Text>
+            {isMine ? (
+              <View style={styles.myStakeRow}>
+                <Feather
+                  name="check-circle"
+                  size={rs.font(10)}
+                  color={color}
+                />
+                <Text style={[styles.myStakeText, { color }]}>
+                  You&apos;re in · ₦{formatKoboAsNaira(myStakeKobo)}
+                </Text>
+              </View>
+            ) : null}
+          </View>
         </View>
         {poolExists ? (
           <Text style={isLeading ? styles.percentLeading : styles.percentOther}>
@@ -205,7 +301,7 @@ function OutcomeRow({
         ) : (
           <Text style={styles.percentDash}>—</Text>
         )}
-        {poolExists ? (
+        {poolExists && outcome.multiplier !== null ? (
           <View style={styles.multiplierPill}>
             <Text style={[styles.multiplierText, { color }]}>
               {outcome.multiplier}x
@@ -214,10 +310,7 @@ function OutcomeRow({
         ) : (
           <View style={styles.multiplierPlaceholder} />
         )}
-        <View style={[styles.stakeChip, { backgroundColor: `${color}1A`, borderColor: `${color}55` }]}>
-          <Text style={[styles.stakeChipText, { color }]}>STAKE</Text>
-          <Feather name="chevron-right" size={rs.font(14)} color={color} />
-        </View>
+        {renderActionChip()}
       </Animated.View>
     </Pressable>
   );
@@ -326,6 +419,42 @@ export default function MarketDetailScreen() {
   const { market, outcomes, isLoading, isError } = useMarket(slug);
   const { comments, isLoading: commentsLoading } = useComments(market?.id);
   const { userId, displayName, username } = useAuth();
+  const { bets: myActiveBets } = useMyBets({ status: 'active' });
+
+  // Collapse the user's raw active bets into one position per outcome,
+  // then index by outcomeId for cheap O(1) lookups inside the row renderer.
+  // The user is "locked" into whichever outcome they already staked on —
+  // the API allows multiple stakes on the same outcome but rejects bets
+  // on a different outcome in the same market.
+  const myStakeByOutcomeId = useMemo(() => {
+    if (!market) return new Map<string, string>();
+    const positions = groupBetsIntoPositions(myActiveBets).filter(
+      (p) => p.marketId === market.id
+    );
+    const map = new Map<string, string>();
+    for (const p of positions) map.set(p.outcomeId, p.totalStakeKobo);
+    return map;
+  }, [myActiveBets, market]);
+
+  const lockedOutcomeId = useMemo<string | null>(() => {
+    const first = myStakeByOutcomeId.keys().next();
+    return first.done ? null : first.value;
+  }, [myStakeByOutcomeId]);
+
+  const lockedOutcome = useMemo(
+    () =>
+      lockedOutcomeId
+        ? outcomes.find((o) => o.id === lockedOutcomeId) ?? null
+        : null,
+    [lockedOutcomeId, outcomes]
+  );
+  const lockedOutcomeIndex = useMemo(
+    () =>
+      lockedOutcomeId
+        ? outcomes.findIndex((o) => o.id === lockedOutcomeId)
+        : -1,
+    [lockedOutcomeId, outcomes]
+  );
 
   const poolExists = !!market && market.totalPoolKobo !== '0';
   const leadingIdx = useMemo(() => leadingOutcomeIndex(outcomes), [outcomes]);
@@ -342,6 +471,20 @@ export default function MarketDetailScreen() {
   const [betSheetOpen, setBetSheetOpen] = useState(false);
   const [selectedOutcome, setSelectedOutcome] = useState<DetailOutcome | null>(null);
   const [selectedIndex, setSelectedIndex] = useState(0);
+  const [lockedNoticeOpen, setLockedNoticeOpen] = useState(false);
+  const [attemptedLabel, setAttemptedLabel] = useState<string | null>(null);
+
+  // Mirror the binary/scheme color resolution used inside MarketBody so the
+  // locked-notice sheet reads the same color the user just saw on the row.
+  const resolveOutcomeColor = useCallback(
+    (index: number): string => {
+      if (!market) return outcomeColor(index);
+      const isBinary = outcomes.length <= 2;
+      const scheme = isBinary ? getCardSchemeColors(market.id) : null;
+      return scheme ? scheme[index] ?? outcomeColor(index) : outcomeColor(index);
+    },
+    [market, outcomes.length]
+  );
 
   const [pendingLikes, setPendingLikes] = useState<Set<string>>(new Set());
   const toggleLikeMutation = useToggleLike(market?.id);
@@ -365,9 +508,26 @@ export default function MarketDetailScreen() {
   };
 
   const handleOutcomePress = (outcome: DetailOutcome, index: number) => {
+    // If the user is locked into a different outcome, never let them hit the
+    // API and bounce back red — show a calm explanation sheet instead.
+    if (lockedOutcomeId && lockedOutcomeId !== outcome.id) {
+      setAttemptedLabel(outcome.label);
+      setLockedNoticeOpen(true);
+      return;
+    }
     setSelectedOutcome(outcome);
     setSelectedIndex(index);
     setBetSheetOpen(true);
+  };
+
+  const handleAddToLocked = () => {
+    if (!lockedOutcome || lockedOutcomeIndex < 0) return;
+    setLockedNoticeOpen(false);
+    setSelectedOutcome(lockedOutcome);
+    setSelectedIndex(lockedOutcomeIndex);
+    // Slight delay so the notice sheet's exit animation doesn't fight the
+    // bet sheet's enter animation on slower devices.
+    setTimeout(() => setBetSheetOpen(true), 180);
   };
 
   const handleInputPress = () => {
@@ -413,6 +573,8 @@ export default function MarketDetailScreen() {
           outcomeIndexByLabel={outcomeIndexByLabel}
           handleToggleLike={handleToggleLike}
           pendingLikes={pendingLikes}
+          myStakeByOutcomeId={myStakeByOutcomeId}
+          lockedOutcomeId={lockedOutcomeId}
         />
 
 
@@ -443,7 +605,30 @@ export default function MarketDetailScreen() {
         market={market ?? null}
         outcome={selectedOutcome}
         outcomeIndex={selectedIndex}
+        myStakeKoboOnOutcome={
+          selectedOutcome
+            ? myStakeByOutcomeId.get(selectedOutcome.id) ?? null
+            : null
+        }
         onClose={() => setBetSheetOpen(false)}
+      />
+
+      <LockedNoticeSheet
+        visible={lockedNoticeOpen}
+        lockedOutcomeLabel={lockedOutcome?.label ?? null}
+        lockedOutcomeColor={
+          lockedOutcomeIndex >= 0
+            ? resolveOutcomeColor(lockedOutcomeIndex)
+            : '#FF6500'
+        }
+        lockedStakeKobo={
+          lockedOutcomeId
+            ? myStakeByOutcomeId.get(lockedOutcomeId) ?? null
+            : null
+        }
+        attemptedOutcomeLabel={attemptedLabel}
+        onAddToLocked={handleAddToLocked}
+        onClose={() => setLockedNoticeOpen(false)}
       />
     </SafeAreaView>
   );
@@ -467,6 +652,8 @@ type MarketBodyProps = {
   outcomeIndexByLabel: Map<string, number>;
   handleToggleLike: (commentId: string) => void;
   pendingLikes: Set<string>;
+  myStakeByOutcomeId: Map<string, string>;
+  lockedOutcomeId: string | null;
 };
 
 function MarketBody({
@@ -482,6 +669,8 @@ function MarketBody({
   outcomeIndexByLabel,
   handleToggleLike,
   pendingLikes,
+  myStakeByOutcomeId,
+  lockedOutcomeId,
 }: MarketBodyProps) {
   const renderComment = useCallback(
     ({ item }: { item: Comment }) => (
@@ -495,7 +684,13 @@ function MarketBody({
     [outcomeIndexByLabel, handleToggleLike, pendingLikes]
   );
 
-  if (isLoading) return <SkeletonBody />;
+  if (isLoading) {
+    return (
+      <View style={styles.loadingWrap}>
+        <ActivityIndicator size="small" color="#FF6500" />
+      </View>
+    );
+  }
   if (isError || !market) {
     return (
       <View style={styles.errorWrap}>
@@ -505,6 +700,12 @@ function MarketBody({
       </View>
     );
   }
+
+  const isBinary = outcomes.length <= 2;
+  const scheme = isBinary ? getCardSchemeColors(market.id) : null;
+  const getOutcomeColor = (index: number) =>
+    scheme ? (scheme[index] ?? outcomeColor(index)) : outcomeColor(index);
+  const resolvedColors = outcomes.map((_, i) => getOutcomeColor(i));
 
   const Header = (
     <View>
@@ -518,22 +719,30 @@ function MarketBody({
       </View>
 
       <View style={styles.stadium}>
-        <SplitBar outcomes={outcomes} poolExists={poolExists} />
+        <SplitBar outcomes={outcomes} poolExists={poolExists} colors={resolvedColors} />
         <View style={styles.tapHintRow}>
           <Feather name="zap" size={rs.font(11)} color="#FF6500" />
           <Text style={styles.tapHintText}>TAP A SIDE TO STAKE</Text>
         </View>
         <View style={styles.outcomeList}>
-          {outcomes.map((o, i) => (
-            <OutcomeRow
-              key={o.id}
-              outcome={o}
-              index={i}
-              isLeading={poolExists && i === leadingIdx}
-              poolExists={poolExists}
-              onPress={handleOutcomePress}
-            />
-          ))}
+          {outcomes.map((o, i) => {
+            const myStake = myStakeByOutcomeId.get(o.id) ?? null;
+            const isOtherLocked =
+              !!lockedOutcomeId && lockedOutcomeId !== o.id;
+            return (
+              <OutcomeRow
+                key={o.id}
+                outcome={o}
+                index={i}
+                isLeading={poolExists && i === leadingIdx}
+                poolExists={poolExists}
+                onPress={handleOutcomePress}
+                color={getOutcomeColor(i)}
+                myStakeKobo={myStake}
+                isOtherLocked={isOtherLocked}
+              />
+            );
+          })}
         </View>
         <PulseStrip bettorCount={market.bettorCount} />
       </View>
@@ -559,8 +768,7 @@ function MarketBody({
         </View>
       </View>
       <Text style={styles.feeLine}>
-        House takes {market.feeBps / 100}% · Closes{' '}
-        {formatClosesIn(market.closesAt)}
+        House takes {market.feeBps / 100}% · {formatClosesIn(market.closesAt)}
       </Text>
 
       <View style={styles.crowdDivider}>
@@ -721,12 +929,43 @@ const styles = StyleSheet.create({
     height: rs.size(10),
     borderRadius: rs.size(5),
   },
-  outcomeLabel: {
+  outcomeLabelWrap: {
     marginLeft: rs.size(12),
+    flexShrink: 1,
+  },
+  outcomeLabel: {
     fontFamily: Fonts.semibold,
     fontSize: rs.font(16),
     color: '#FFFFFF',
-    flexShrink: 1,
+  },
+  myStakeRow: {
+    marginTop: rs.size(2),
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: rs.size(4),
+  },
+  myStakeText: {
+    fontFamily: Fonts.semibold,
+    fontSize: rs.font(11),
+    letterSpacing: 0.2,
+  },
+  lockedChip: {
+    marginLeft: rs.size(10),
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: rs.size(4),
+    backgroundColor: '#141414',
+    borderColor: '#1F1F1F',
+    borderWidth: 1,
+    borderRadius: rs.size(999),
+    paddingHorizontal: rs.size(10),
+    paddingVertical: rs.size(5),
+  },
+  lockedChipText: {
+    fontFamily: Fonts.bold,
+    fontSize: rs.font(10),
+    color: '#666666',
+    letterSpacing: 1,
   },
   percentLeading: {
     fontFamily: Fonts.bold,
@@ -736,8 +975,8 @@ const styles = StyleSheet.create({
   },
   percentOther: {
     fontFamily: Fonts.bold,
-    fontSize: rs.font(22),
-    color: '#AAAAAA',
+    fontSize: rs.font(18),
+    color: '#4A4A4A',
     marginRight: rs.size(12),
   },
   percentDash: {
@@ -801,7 +1040,7 @@ const styles = StyleSheet.create({
 
   // Zone 4 — Stats
   statsStrip: {
-    marginTop: rs.size(20),
+    marginTop: rs.size(28),
     marginHorizontal: rs.size(20),
     backgroundColor: '#111111',
     borderRadius: rs.size(16),
@@ -843,7 +1082,7 @@ const styles = StyleSheet.create({
 
   // Zone 5
   crowdDivider: {
-    marginTop: rs.size(28),
+    marginTop: rs.size(44),
     paddingHorizontal: rs.size(20),
     flexDirection: 'row',
     alignItems: 'center',
@@ -857,7 +1096,7 @@ const styles = StyleSheet.create({
   crowdLabel: {
     fontFamily: Fonts.bold,
     fontSize: rs.font(13),
-    color: '#FF6500',
+    color: '#666666',
     letterSpacing: 1.5,
   },
 
@@ -892,8 +1131,8 @@ const styles = StyleSheet.create({
 
   commentRow: {
     paddingHorizontal: rs.size(20),
-    paddingTop: rs.size(16),
-    paddingBottom: rs.size(16),
+    paddingTop: rs.size(20),
+    paddingBottom: rs.size(20),
     borderBottomWidth: 1,
     borderBottomColor: '#0F0F0F',
     flexDirection: 'row',
@@ -997,6 +1236,12 @@ const styles = StyleSheet.create({
   },
 
   // Skeleton + error
+  loadingWrap: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: rs.size(64),
+  },
   skeletonWrap: { paddingHorizontal: rs.size(20) },
   skeleton: {
     backgroundColor: '#111111',

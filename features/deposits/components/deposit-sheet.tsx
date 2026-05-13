@@ -32,6 +32,7 @@ import { Feather } from '@expo/vector-icons';
 import { Fonts } from '@/constants/fonts';
 import { rs } from '@/utils/responsive';
 import { formatKoboAsNaira } from '@/lib/utils/money';
+import { API_BASE_URL } from '@/lib/api/axios';
 import { useAuth } from '@/features/auth';
 import {
   DEPOSIT_MAX_KOBO,
@@ -157,7 +158,7 @@ export function DepositSheet({ visible, onClose }: Props) {
       // openBrowserAsync resolves when the user dismisses the in-app browser.
       // The Paystack webhook is what actually credits the wallet — the poll
       // started above will surface the result.
-      await WebBrowser.openBrowserAsync(init.authorizationUrl, {
+      await WebBrowser.openBrowserAsync(toCheckoutUrl(init.authorizationUrl), {
         presentationStyle: WebBrowser.WebBrowserPresentationStyle.PAGE_SHEET,
         controlsColor: ACCENT,
         toolbarColor: '#0A0A0A',
@@ -487,6 +488,28 @@ function sanitizeNairaInput(text: string): string {
   const digits = text.replace(/\D/g, '');
   // Drop leading zeros so '0500' becomes '500'.
   return digits.replace(/^0+(?=\d)/, '');
+}
+
+// In Paystack mock mode the backend returns a localhost URL like
+// `http://localhost:3000/deposits/{ref}/mock-checkout?...`. That host obviously
+// can't load on a real device, so we rewrite it to the live API base. Real
+// Paystack URLs (checkout.paystack.com / paystack.shop) pass through
+// untouched.
+function toCheckoutUrl(rawUrl: string): string {
+  try {
+    const url = new URL(rawUrl);
+    const isLocal =
+      url.hostname === 'localhost' ||
+      url.hostname === '127.0.0.1' ||
+      url.hostname === '0.0.0.0';
+    if (!isLocal) return rawUrl;
+    const base = new URL(API_BASE_URL);
+    url.protocol = base.protocol;
+    url.host = base.host;
+    return url.toString();
+  } catch {
+    return rawUrl;
+  }
 }
 
 function nairaTextToKobo(text: string): bigint | null {

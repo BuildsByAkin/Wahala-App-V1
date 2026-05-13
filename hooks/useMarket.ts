@@ -26,7 +26,8 @@ export type DetailOutcome = {
   totalPoolKobo: string;
   bettorCount: number;
   sharePercent: number;
-  multiplier: number;
+  // null when the outcome has zero pool — render "—" in that case.
+  multiplier: number | null;
 };
 
 type MarketDetailResponse = {

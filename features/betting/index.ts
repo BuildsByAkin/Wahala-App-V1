@@ -1,9 +1,11 @@
 // features/betting/index.ts
 export { BetSheet } from './components/bet-sheet';
+export { LockedNoticeSheet } from './components/locked-notice-sheet';
 export { PositionRow } from './components/position-row';
 export { HistoryRow } from './components/history-row';
 export { usePlaceBet, type PlaceBetError, type PlaceBetErrorCode } from './hooks/use-place-bet';
 export { useMyBets } from './hooks/use-my-bets';
+export { useMyBetsSummary } from './hooks/use-my-bets-summary';
 export {
   bettingApi,
   type DisplayMode,

@@ -8,34 +8,36 @@ import {
   type Market,
   formatClosesIn,
   formatPoolKobo,
-  getOutcomeMultiplier,
   getOutcomePercent,
   hasPool,
+  getCardSchemeColors,
+  isClosingSoon,
 } from '@/utils/market';
 
 interface MarketCardCompactProps {
   market: Market;
 }
 
-const DOT_PALETTE = ['#4CAF50', '#FF3B30', '#29B6F6', '#FFA726'];
+const FALLBACK_PALETTE = ['#4CAF50', '#FF3B30', '#29B6F6', '#FFA726'];
 
 export const MarketCardCompact: React.FC<MarketCardCompactProps> = ({ market }) => {
   const poolExists = hasPool(market.totalPoolKobo);
   const closesLabel = formatClosesIn(market.closesAt);
+  const isSoon = isClosingSoon(market.closesAt);
   const outcomes = (market.outcomes ?? []).slice(0, 2);
+  const isBinary = market.outcomes.length <= 2;
+  const scheme = isBinary ? getCardSchemeColors(market.id) : null;
 
   return (
     <View style={styles.container}>
-      {/* Row 1 */}
+      {/* Header */}
       <View style={styles.header}>
-        <View style={styles.tags}>
-          <View style={styles.categoryTag}>
-            <Text style={styles.categoryText}>{market.category.toUpperCase()}</Text>
-          </View>
+        <View style={styles.categoryTag}>
+          <Text style={styles.categoryText}>{market.category.toUpperCase()}</Text>
         </View>
         <View style={styles.rightInfo}>
-          <Feather name="clock" size={rs.font(11)} color="#888888" />
-          <Text style={styles.infoText}>{closesLabel}</Text>
+          <Feather name="clock" size={rs.font(11)} color={isSoon ? '#FF6500' : '#444444'} />
+          <Text style={[styles.infoText, isSoon && styles.infoTextUrgent]}>{closesLabel}</Text>
         </View>
       </View>
 
@@ -46,23 +48,24 @@ export const MarketCardCompact: React.FC<MarketCardCompactProps> = ({ market }) 
       {outcomes.length > 0 && (
         <View style={styles.outcomes}>
           {outcomes.map((outcome, index) => {
-            const dotColor = DOT_PALETTE[index] ?? '#888888';
+            const dotColor = scheme ? scheme[index] : (FALLBACK_PALETTE[index] ?? '#888888');
             const percent = poolExists
               ? getOutcomePercent(outcome.totalStakedKobo, market.totalPoolKobo)
               : null;
-            const multiplier = poolExists
-              ? getOutcomeMultiplier(outcome.totalStakedKobo, market.totalPoolKobo)
-              : null;
             return (
-              <View key={outcome.id} style={styles.outcomePill}>
+              <View
+                key={outcome.id}
+                style={[
+                  styles.outcomePill,
+                  { backgroundColor: `${dotColor}14`, borderColor: `${dotColor}35` },
+                ]}
+              >
                 <View style={styles.outcomeLeft}>
                   <View style={[styles.dot, { backgroundColor: dotColor }]} />
                   <Text style={styles.outcomeLabel}>{outcome.label}</Text>
                 </View>
-                {percent !== null && multiplier !== null && (
-                  <Text style={styles.outcomeRight}>
-                    {percent}% · {multiplier}x
-                  </Text>
+                {percent !== null && (
+                  <Text style={[styles.outcomeRight, { color: dotColor }]}>{percent}%</Text>
                 )}
               </View>
             );
@@ -83,11 +86,16 @@ export const MarketCardCompact: React.FC<MarketCardCompactProps> = ({ market }) 
           )}
         </View>
         <View style={styles.comments}>
-          <Feather name="message-square" size={rs.font(13)} color="#888888" />
+          <Feather name="message-square" size={rs.font(13)} color="#444444" />
           <Text style={styles.commentCount}> {market.commentCount}</Text>
         </View>
       </View>
 
+      {/* CTA row */}
+      <View style={styles.ctaRow}>
+        <Text style={styles.ctaText}>View market</Text>
+        <Feather name="chevron-right" size={rs.font(14)} color="#FF6500" />
+      </View>
     </View>
   );
 };
@@ -102,11 +110,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-  },
-  tags: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: rs.size(6),
   },
   categoryTag: {
     backgroundColor: '#2A2A2A',
@@ -128,7 +131,10 @@ const styles = StyleSheet.create({
   infoText: {
     fontFamily: Fonts.regular,
     fontSize: rs.font(12),
-    color: '#888888',
+    color: '#555555',
+  },
+  infoTextUrgent: {
+    color: '#FF6500',
   },
   question: {
     marginTop: rs.size(10),
@@ -144,8 +150,8 @@ const styles = StyleSheet.create({
   },
   outcomePill: {
     flex: 1,
-    backgroundColor: '#1E1E1E',
     borderRadius: rs.size(10),
+    borderWidth: 1,
     paddingVertical: rs.size(10),
     paddingHorizontal: rs.size(12),
     flexDirection: 'row',
@@ -168,9 +174,8 @@ const styles = StyleSheet.create({
     marginLeft: rs.size(6),
   },
   outcomeRight: {
-    fontFamily: Fonts.regular,
-    fontSize: rs.font(12),
-    color: '#888888',
+    fontFamily: Fonts.bold,
+    fontSize: rs.font(13),
   },
   poolRow: {
     marginTop: rs.size(12),
@@ -178,17 +183,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
   },
-  poolLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
   poolInfo: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginLeft: rs.size(8),
-  },
-  poolInfoNoAvatars: {
-    marginLeft: 0,
   },
   poolAmount: {
     fontFamily: Fonts.bold,
@@ -198,7 +195,7 @@ const styles = StyleSheet.create({
   poolLabel: {
     fontFamily: Fonts.regular,
     fontSize: rs.font(13),
-    color: '#888888',
+    color: '#555555',
   },
   firstStake: {
     fontFamily: Fonts.medium,
@@ -212,6 +209,21 @@ const styles = StyleSheet.create({
   commentCount: {
     fontFamily: Fonts.regular,
     fontSize: rs.font(13),
-    color: '#888888',
+    color: '#555555',
+  },
+  ctaRow: {
+    marginTop: rs.size(12),
+    paddingTop: rs.size(12),
+    borderTopWidth: 1,
+    borderTopColor: '#1E1E1E',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    gap: rs.size(3),
+  },
+  ctaText: {
+    fontFamily: Fonts.semibold,
+    fontSize: rs.font(12),
+    color: '#FF6500',
   },
 });
