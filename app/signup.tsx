@@ -2,7 +2,7 @@
 import * as Haptics from 'expo-haptics';
 import { useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
@@ -15,17 +15,22 @@ import {
   View,
 } from 'react-native';
 
+import { Feather } from '@expo/vector-icons';
+
 import { PinInput } from '@/components/ui/PinInput';
 import { Colors } from '@/constants/colors';
 import { Fonts } from '@/constants/fonts';
-import { useAuth } from '@/features/auth';
+import { setAgreedToTerms, useAuth } from '@/features/auth';
 import { isValidNigerianPhone } from '@/lib/utils/phone';
+import { useAppDispatch, useAppSelector } from '@/store';
 import { rs } from '@/utils/responsive';
 
 type SignupStep = 'phone' | 'otp' | 'pin' | 'name';
 
 export default function SignupScreen() {
   const router = useRouter();
+  const dispatch = useAppDispatch();
+  const hasSeenWelcome = useAppSelector((s) => s.auth.hasSeenWelcome);
   const { sendOtp, signup, setDisplayName, isLoading, error, clearError } =
     useAuth();
 
@@ -37,12 +42,28 @@ export default function SignupScreen() {
   const [confirmPin, setConfirmPin] = useState('');
   const [displayName, setLocalDisplayName] = useState('');
   const [localError, setLocalError] = useState<string | null>(null);
+  // Age + T&C agreement — local boolean only. Never goes to Redux until
+  // signup succeeds (then we persist the *timestamp*, not the checkbox).
+  const [agreedToTerms, setAgreedToTermsLocal] = useState(false);
 
   const canSendCode = isValidNigerianPhone(phone);
   const canVerify = otp.length === 6;
   const pinComplete = pin.length === 4 && confirmPin.length === 4;
   const pinsMatch = pin === confirmPin;
+  const canCreateAccount = pinComplete && pinsMatch && agreedToTerms;
   const canSaveName = displayName.trim().length >= 2;
+
+  // Where to go once the signup flow finishes. New users see the welcome
+  // screen exactly once; returning users (re-running signup somehow) skip it.
+  const postSignupRoute = hasSeenWelcome ? '/(tabs)' : '/welcome';
+
+  const openLegal = useCallback(
+    (doc: 'terms' | 'privacy') => {
+      Haptics.selectionAsync().catch(() => {});
+      router.push(`/legal/${doc}` as never);
+    },
+    [router]
+  );
 
   useEffect(() => {
     return () => clearError();
@@ -87,6 +108,10 @@ export default function SignupScreen() {
   // ── Step 3: PIN + confirm → signup-complete ────────────────────────────
   const handleCreate = async () => {
     if (!pinComplete) return;
+    // Belt-and-braces — the button is disabled, but a fast double-tap or a
+    // testing harness could still hit this path. Treat the checkbox as a
+    // hard precondition for hitting the network.
+    if (!agreedToTerms) return;
     if (!pinsMatch) {
       setLocalError('PINs do not match');
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(
@@ -99,6 +124,10 @@ export default function SignupScreen() {
     setLocalError(null);
     const result = await signup(phone, otp, pin);
     if (result.ok) {
+      // Persist the agreement timestamp the moment the account exists. We
+      // do this *after* a successful signup so we never store consent for
+      // an account that wasn't actually created.
+      dispatch(setAgreedToTerms(new Date().toISOString()));
       // Wipe ephemeral secrets immediately.
       setOtp('');
       setPin('');
@@ -117,7 +146,7 @@ export default function SignupScreen() {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
     const result = await setDisplayName(displayName.trim());
     if (result.ok) {
-      router.replace('/(tabs)');
+      router.replace(postSignupRoute as never);
     } else {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(
         () => {}
@@ -127,7 +156,7 @@ export default function SignupScreen() {
 
   const handleSkipName = () => {
     Haptics.selectionAsync().catch(() => {});
-    router.replace('/(tabs)');
+    router.replace(postSignupRoute as never);
   };
 
   // ── Back navigation ────────────────────────────────────────────────────
@@ -145,8 +174,9 @@ export default function SignupScreen() {
     } else if (step === 'name') {
       // Account is already created at this point — going back doesn't undo
       // signup, but we let the user move forward instead. Keep the back arrow
-      // disabled visually by routing to home.
-      router.replace('/(tabs)');
+      // disabled visually by routing forward (welcome on first signup, home
+      // afterwards).
+      router.replace(postSignupRoute as never);
     } else {
       router.back();
     }
@@ -344,12 +374,14 @@ export default function SignupScreen() {
                     onPress={handleCreate}
                     style={({ pressed }) => [
                       styles.primaryButton,
-                      (!pinComplete || isLoading) && styles.buttonDisabled,
-                      pressed && pinComplete && !isLoading && styles.pressed,
+                      (!canCreateAccount || isLoading) && styles.buttonDisabled,
+                      pressed && canCreateAccount && !isLoading && styles.pressed,
                     ]}
                     accessibilityRole="button"
                     accessibilityLabel="Create account"
-                    accessibilityState={{ disabled: !pinComplete || isLoading }}
+                    accessibilityState={{
+                      disabled: !canCreateAccount || isLoading,
+                    }}
                   >
                     {isLoading ? (
                       <ActivityIndicator color={Colors.black} />
@@ -359,6 +391,55 @@ export default function SignupScreen() {
                       </Text>
                     )}
                   </Pressable>
+
+                  {/* Age + T&C agreement row. Disabled state on the button
+                      above is the *only* feedback when this is unchecked —
+                      no error copy, the checkbox is always visible. */}
+                  <View style={styles.agreementRow}>
+                    <Pressable
+                      onPress={() => {
+                        Haptics.selectionAsync().catch(() => {});
+                        setAgreedToTermsLocal((v) => !v);
+                      }}
+                      hitSlop={10}
+                      accessibilityRole="checkbox"
+                      accessibilityLabel="I am 21 or older and I agree to the Terms and Conditions and Privacy Policy"
+                      accessibilityState={{ checked: agreedToTerms }}
+                      style={[
+                        styles.checkbox,
+                        agreedToTerms && styles.checkboxChecked,
+                      ]}
+                    >
+                      {agreedToTerms ? (
+                        <Feather
+                          name="check"
+                          size={rs.size(12)}
+                          color={Colors.textPrimary}
+                        />
+                      ) : null}
+                    </Pressable>
+                    <Text
+                      allowFontScaling={false}
+                      style={styles.agreementText}
+                    >
+                      <Text>I am 21 or older and I agree to the </Text>
+                      <Text
+                        style={styles.agreementLink}
+                        onPress={() => openLegal('terms')}
+                        accessibilityRole="link"
+                      >
+                        Terms &amp; Conditions
+                      </Text>
+                      <Text> and </Text>
+                      <Text
+                        style={styles.agreementLink}
+                        onPress={() => openLegal('privacy')}
+                        accessibilityRole="link"
+                      >
+                        Privacy Policy
+                      </Text>
+                    </Text>
+                  </View>
                   <Pressable
                     onPress={handleBack}
                     hitSlop={10}
@@ -608,6 +689,44 @@ const styles = StyleSheet.create({
     includeFontPadding: false,
   },
   loginCta: {
+    color: Colors.brand,
+    fontFamily: Fonts.semibold,
+    fontSize: rs.font(13),
+    includeFontPadding: false,
+  },
+  agreementRow: {
+    marginTop: rs.size(16),
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+  },
+  // 20pt square spec'd, scaled responsively. Border 1.5px stays unscaled —
+  // hairlines should render visually identical across DPRs.
+  checkbox: {
+    width: rs.size(20),
+    height: rs.size(20),
+    borderRadius: rs.size(4),
+    borderWidth: 1.5,
+    borderColor: '#333333',
+    backgroundColor: 'transparent',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: rs.size(1),
+  },
+  checkboxChecked: {
+    backgroundColor: Colors.brand,
+    borderColor: Colors.brand,
+  },
+  agreementText: {
+    flex: 1,
+    marginLeft: rs.size(10),
+    color: '#888888',
+    fontFamily: Fonts.regular,
+    fontSize: rs.font(13),
+    lineHeight: rs.font(18),
+    flexWrap: 'wrap',
+    includeFontPadding: false,
+  },
+  agreementLink: {
     color: Colors.brand,
     fontFamily: Fonts.semibold,
     fontSize: rs.font(13),

@@ -30,7 +30,7 @@ export {
 export { useBvnStatus, useVerifyBvn } from './hooks/use-bvn';
 export {
   useInitiateWithdrawal,
-  useWithdrawalStatus,
+  useWithdrawalStatusOnce,
   useMyWithdrawals,
   extractWithdrawalError,
 } from './hooks/use-withdrawals';

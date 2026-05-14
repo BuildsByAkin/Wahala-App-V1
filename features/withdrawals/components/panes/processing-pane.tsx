@@ -16,10 +16,12 @@ import { ACCENT } from '../sheet-styles';
 
 type Props = {
   amountKobo: string;
-  statusError: string | null;
 };
 
-export function ProcessingPane({ amountKobo, statusError }: Props) {
+// Shown for ~5s between POST /withdrawals success and the one-shot status
+// check. No spinner that implies real-time settlement — withdrawals are
+// queued for manual processing and resolve out-of-band within 4 hours.
+export function ProcessingPane({ amountKobo }: Props) {
   const pulse = useRef(new Animated.Value(1)).current;
   useEffect(() => {
     const loop = Animated.loop(
@@ -52,13 +54,10 @@ export function ProcessingPane({ amountKobo, statusError }: Props) {
       >
         <Feather name="clock" size={rs.font(28)} color={ACCENT} />
       </Animated.View>
-      <Text style={styles.title}>Processing your withdrawal</Text>
+      <Text style={styles.title}>Submitting your request</Text>
       <Text style={styles.subtitle}>
-        ₦{formatKoboAsNaira(amountKobo)} is being sent to your bank. This
-        usually takes a few seconds.
-      </Text>
-      <Text style={styles.note}>
-        {statusError ?? 'Checking status every few seconds…'}
+        We&apos;re recording your ₦{formatKoboAsNaira(amountKobo)} withdrawal.
+        This will just take a moment.
       </Text>
     </View>
   );
@@ -91,12 +90,5 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     paddingHorizontal: rs.size(12),
     lineHeight: rs.font(19),
-  },
-  note: {
-    marginTop: rs.size(16),
-    fontFamily: Fonts.regular,
-    fontSize: rs.font(12),
-    color: '#555555',
-    textAlign: 'center',
   },
 });

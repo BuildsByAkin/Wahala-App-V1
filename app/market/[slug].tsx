@@ -1,346 +1,62 @@
-// app/market/[slug].tsx
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
-  Animated,
-  Easing,
   Pressable,
   StyleSheet,
   Text,
   View,
 } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
+import { Image } from 'expo-image';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import * as Haptics from 'expo-haptics';
 
+import { Colors } from '@/constants/colors';
 import { Fonts } from '@/constants/fonts';
 import { rs } from '@/utils/responsive';
 import { useMarket, type DetailOutcome } from '@/hooks/useMarket';
 import { useComments, type Comment } from '@/hooks/useComments';
 import { useToggleLike } from '@/hooks/useToggleLike';
+import { useCreateComment } from '@/hooks/useCreateComment';
+import { CommentComposerSheet } from '@/components/market/comment-composer-sheet';
+import { OutcomeRow } from '@/components/market/outcome-row';
+import { StatsStrip } from '@/components/market/stats-strip';
+import { StatusPill } from '@/components/market/status-pill';
+import { PulseRail } from '@/components/market/pulse-rail';
+import { SidePanel, type PanelState } from '@/components/market/side-panel';
 import {
-  formatClosesIn,
   getAvatarColor,
-  getCardSchemeColors,
   getInitial,
   outcomeColor,
   timeAgo,
 } from '@/utils/market';
-import { formatKoboAsNaira } from '@/lib/utils/money';
+import { ErrorBoundary } from '@/components/error-boundary';
 import { useAuth } from '@/features/auth';
 import {
-  BetSheet,
   LockedNoticeSheet,
+  StakeSheet,
   groupBetsIntoPositions,
   useMyBets,
 } from '@/features/betting';
 
-function leadingOutcomeIndex(outcomes: DetailOutcome[]): number {
-  if (outcomes.length === 0) return -1;
-  let bestIdx = 0;
-  let bestPct = -Infinity;
-  outcomes.forEach((o, i) => {
-    if (o.sharePercent > bestPct) {
-      bestPct = o.sharePercent;
-      bestIdx = i;
-    }
-  });
-  return bestPct > 0 ? bestIdx : -1;
+const PULSE_YES = '#14B8A6';
+const PULSE_NO = '#6366F1';
+
+function isYesLabel(label: string) {
+  return /^y(es)?$/i.test(label.trim());
+}
+function isNoLabel(label: string) {
+  return /^n(o)?$/i.test(label.trim());
 }
 
-function usePulse() {
-  const opacity = useRef(new Animated.Value(1)).current;
-  useEffect(() => {
-    const loop = Animated.loop(
-      Animated.sequence([
-        Animated.timing(opacity, {
-          toValue: 0.4,
-          duration: 500,
-          easing: Easing.inOut(Easing.ease),
-          useNativeDriver: true,
-        }),
-        Animated.timing(opacity, {
-          toValue: 1,
-          duration: 500,
-          easing: Easing.inOut(Easing.ease),
-          useNativeDriver: true,
-        }),
-      ])
-    );
-    loop.start();
-    return () => loop.stop();
-  }, [opacity]);
-  return opacity;
-}
-
-function useDotPulse() {
-  const scale = useRef(new Animated.Value(1)).current;
-  const opacity = useRef(new Animated.Value(1)).current;
-  useEffect(() => {
-    const loop = Animated.loop(
-      Animated.sequence([
-        Animated.parallel([
-          Animated.timing(scale, {
-            toValue: 1.6,
-            duration: 800,
-            easing: Easing.out(Easing.ease),
-            useNativeDriver: true,
-          }),
-          Animated.timing(opacity, {
-            toValue: 0.3,
-            duration: 800,
-            easing: Easing.out(Easing.ease),
-            useNativeDriver: true,
-          }),
-        ]),
-        Animated.parallel([
-          Animated.timing(scale, {
-            toValue: 1,
-            duration: 600,
-            easing: Easing.in(Easing.ease),
-            useNativeDriver: true,
-          }),
-          Animated.timing(opacity, {
-            toValue: 1,
-            duration: 600,
-            easing: Easing.in(Easing.ease),
-            useNativeDriver: true,
-          }),
-        ]),
-      ])
-    );
-    loop.start();
-    return () => loop.stop();
-  }, [scale, opacity]);
-  return { scale, opacity };
-}
-
-function SkeletonBody() {
-  const opacity = usePulse();
-  return (
-    <View style={styles.skeletonWrap}>
-      <Animated.View style={[styles.skeleton, { height: rs.size(80), marginTop: rs.size(12), opacity }]} />
-      <Animated.View style={[styles.skeleton, { height: rs.size(180), marginTop: rs.size(12), opacity }]} />
-      <Animated.View style={[styles.skeleton, { height: rs.size(100), marginTop: rs.size(12), opacity }]} />
-    </View>
-  );
-}
-
-function SplitBar({
-  outcomes,
-  poolExists,
-  colors,
-}: {
-  outcomes: DetailOutcome[];
-  poolExists: boolean;
-  colors?: string[];
-}) {
-  const totalPct = outcomes.reduce((sum, o) => sum + Math.max(0, o.sharePercent), 0);
-  if (!poolExists || outcomes.length === 0 || totalPct <= 0) {
-    return <View style={[styles.splitBar, styles.splitBarNeutral]} />;
-  }
-  return (
-    <View style={styles.splitBar}>
-      {outcomes.map((o, i) => {
-        const pct = Math.max(0, o.sharePercent);
-        if (pct <= 0) return null;
-        return (
-          <View
-            key={o.id}
-            style={{ flex: pct, backgroundColor: colors?.[i] ?? outcomeColor(i) }}
-          />
-        );
-      })}
-    </View>
-  );
-}
-
-function OutcomeRow({
-  outcome,
-  index,
-  isLeading,
-  poolExists,
-  onPress,
-  color,
-  myStakeKobo,
-  isOtherLocked,
-}: {
-  outcome: DetailOutcome;
-  index: number;
-  isLeading: boolean;
-  poolExists: boolean;
-  onPress: (outcome: DetailOutcome, index: number) => void;
-  color: string;
-  // Total amount this user has on THIS outcome (kobo string), or null.
-  myStakeKobo: string | null;
-  // True when the user is locked into a DIFFERENT outcome on this market.
-  isOtherLocked: boolean;
-}) {
-  const scale = useRef(new Animated.Value(1)).current;
-
-  const handlePressIn = () => {
-    Animated.spring(scale, {
-      toValue: 0.98,
-      useNativeDriver: true,
-      speed: 40,
-      bounciness: 0,
-    }).start();
-  };
-  const handlePressOut = () => {
-    Animated.spring(scale, {
-      toValue: 1,
-      useNativeDriver: true,
-      speed: 30,
-      bounciness: 6,
-    }).start();
-  };
-
-  const isMine = !!myStakeKobo;
-
-  // Container styling cascades: mine > leading > default. Locked-other is
-  // intentionally low-key (no red) — the row stays tappable so users can
-  // open the friendly notice sheet.
-  const containerExtra = isMine
-    ? { borderColor: `${color}88`, backgroundColor: `${color}14` }
-    : isOtherLocked
-    ? { borderColor: '#161616', backgroundColor: '#0C0C0C' }
-    : isLeading
-    ? { borderColor: `${color}44`, backgroundColor: `${color}0D` }
-    : null;
-
-  // Right-side action chip swaps based on user state.
-  const renderActionChip = () => {
-    if (isMine) {
-      return (
-        <View
-          style={[
-            styles.stakeChip,
-            { backgroundColor: color, borderColor: color },
-          ]}
-        >
-          <Feather name="plus" size={rs.font(12)} color="#0A0A0A" />
-          <Text style={[styles.stakeChipText, { color: '#0A0A0A' }]}>ADD</Text>
-        </View>
-      );
-    }
-    if (isOtherLocked) {
-      return (
-        <View style={styles.lockedChip}>
-          <Feather name="lock" size={rs.font(11)} color="#666666" />
-          <Text style={styles.lockedChipText}>LOCKED</Text>
-        </View>
-      );
-    }
-    return (
-      <View
-        style={[
-          styles.stakeChip,
-          { backgroundColor: `${color}1A`, borderColor: `${color}55` },
-        ]}
-      >
-        <Text style={[styles.stakeChipText, { color }]}>STAKE</Text>
-        <Feather name="chevron-right" size={rs.font(14)} color={color} />
-      </View>
-    );
-  };
-
-  const accessibilityLabel = isMine
-    ? `Add to your stake on ${outcome.label}`
-    : isOtherLocked
-    ? `Locked — you already staked on a different option`
-    : `Stake on ${outcome.label}`;
-
-  return (
-    <Pressable
-      onPress={() => onPress(outcome, index)}
-      onPressIn={handlePressIn}
-      onPressOut={handlePressOut}
-      accessibilityRole="button"
-      accessibilityLabel={accessibilityLabel}
-      accessibilityHint={
-        isOtherLocked
-          ? 'Opens a notice explaining your existing stake'
-          : 'Opens the betting sheet'
-      }
-    >
-      <Animated.View
-        style={[
-          styles.outcomeRow,
-          containerExtra,
-          isOtherLocked && { opacity: 0.55 },
-          { transform: [{ scale }] },
-        ]}
-      >
-        <View style={[styles.outcomeAccent, { backgroundColor: color }]} />
-        <View style={styles.outcomeLeftWrap}>
-          <View style={[styles.outcomeDot, { backgroundColor: color }]} />
-          <View style={styles.outcomeLabelWrap}>
-            <Text style={styles.outcomeLabel} numberOfLines={1}>
-              {outcome.label}
-            </Text>
-            {isMine ? (
-              <View style={styles.myStakeRow}>
-                <Feather
-                  name="check-circle"
-                  size={rs.font(10)}
-                  color={color}
-                />
-                <Text style={[styles.myStakeText, { color }]}>
-                  You&apos;re in · ₦{formatKoboAsNaira(myStakeKobo)}
-                </Text>
-              </View>
-            ) : null}
-          </View>
-        </View>
-        {poolExists ? (
-          <Text style={isLeading ? styles.percentLeading : styles.percentOther}>
-            {outcome.sharePercent}%
-          </Text>
-        ) : (
-          <Text style={styles.percentDash}>—</Text>
-        )}
-        {poolExists && outcome.multiplier !== null ? (
-          <View style={styles.multiplierPill}>
-            <Text style={[styles.multiplierText, { color }]}>
-              {outcome.multiplier}x
-            </Text>
-          </View>
-        ) : (
-          <View style={styles.multiplierPlaceholder} />
-        )}
-        {renderActionChip()}
-      </Animated.View>
-    </Pressable>
-  );
-}
-
-function PulseStrip({ bettorCount }: { bettorCount: number }) {
-  const { scale, opacity } = useDotPulse();
-  if (bettorCount > 0) {
-    return (
-      <View style={styles.pulseStrip}>
-        <View style={styles.pulseDotWrap}>
-          <Animated.View
-            style={[
-              styles.pulseDotRing,
-              { transform: [{ scale }], opacity },
-            ]}
-          />
-          <View style={styles.pulseDotCore} />
-        </View>
-        <Text style={styles.pulseText}>
-          {bettorCount} {bettorCount === 1 ? 'person' : 'people'} dey stake
-        </Text>
-      </View>
-    );
-  }
-  return (
-    <View style={styles.pulseStrip}>
-      <Text style={styles.pulseTextEmpty}>No bets yet — be the first</Text>
-    </View>
-  );
+function shortTag(label: string): string {
+  const trimmed = label.trim();
+  if (isYesLabel(trimmed)) return 'YES';
+  if (isNoLabel(trimmed)) return 'NO';
+  return trimmed.slice(0, 3).toUpperCase();
 }
 
 function CommentRow({
@@ -348,11 +64,13 @@ function CommentRow({
   outcomeIndexByLabel,
   onToggleLike,
   isPending,
+  resolveColor,
 }: {
   comment: Comment;
   outcomeIndexByLabel: Map<string, number>;
   onToggleLike: (commentId: string) => void;
   isPending: boolean;
+  resolveColor: (index: number) => string;
 }) {
   const avatarColor = getAvatarColor(comment.author.userId);
   const initial = getInitial(comment.author.displayName, comment.author.username);
@@ -360,12 +78,12 @@ function CommentRow({
 
   const betLabel = comment.bet?.outcomeLabel ?? null;
   const betIdx = betLabel != null ? outcomeIndexByLabel.get(betLabel) : undefined;
-  const betColor = typeof betIdx === 'number' ? outcomeColor(betIdx) : '#FF6500';
-  const betBg = `${betColor}26`; // 15% opacity
-  const betBorder = `${betColor}66`; // 40% opacity
+  const betColor = typeof betIdx === 'number' ? resolveColor(betIdx) : Colors.text.secondary;
+  const betBg = `${betColor}26`;
+  const betBorder = `${betColor}66`;
 
   const liked = comment.hasLiked;
-  const heartColor = liked ? '#FF6500' : '#3A3A3A';
+  const heartColor = liked ? Colors.brand : Colors.border.strong;
 
   return (
     <View style={styles.commentRow}>
@@ -376,15 +94,8 @@ function CommentRow({
         <View style={styles.commentHeader}>
           <Text style={styles.commentName}>{name}</Text>
           {betLabel && (
-            <View
-              style={[
-                styles.betPill,
-                { backgroundColor: betBg, borderColor: betBorder },
-              ]}
-            >
-              <Text style={[styles.betPillText, { color: betColor }]}>
-                {betLabel}
-              </Text>
+            <View style={[styles.betPill, { backgroundColor: betBg, borderColor: betBorder }]}>
+              <Text style={[styles.betPillText, { color: betColor }]}>{betLabel}</Text>
             </View>
           )}
         </View>
@@ -400,9 +111,7 @@ function CommentRow({
             style={styles.metaIconGroup}
           >
             <Feather name="heart" size={rs.font(13)} color={heartColor} />
-            <Text style={[styles.metaText, { color: heartColor }]}>
-              {comment.likeCount}
-            </Text>
+            <Text style={[styles.metaText, { color: heartColor }]}>{comment.likeCount}</Text>
           </Pressable>
         </View>
       </View>
@@ -410,7 +119,15 @@ function CommentRow({
   );
 }
 
-export default function MarketDetailScreen() {
+export default function MarketDetailScreenWrapper() {
+  return (
+    <ErrorBoundary label="MarketDetail">
+      <MarketDetailScreen />
+    </ErrorBoundary>
+  );
+}
+
+function MarketDetailScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const params = useLocalSearchParams<{ slug: string }>();
@@ -421,16 +138,9 @@ export default function MarketDetailScreen() {
   const { userId, displayName, username } = useAuth();
   const { bets: myActiveBets } = useMyBets({ status: 'active' });
 
-  // Collapse the user's raw active bets into one position per outcome,
-  // then index by outcomeId for cheap O(1) lookups inside the row renderer.
-  // The user is "locked" into whichever outcome they already staked on —
-  // the API allows multiple stakes on the same outcome but rejects bets
-  // on a different outcome in the same market.
   const myStakeByOutcomeId = useMemo(() => {
     if (!market) return new Map<string, string>();
-    const positions = groupBetsIntoPositions(myActiveBets).filter(
-      (p) => p.marketId === market.id
-    );
+    const positions = groupBetsIntoPositions(myActiveBets).filter((p) => p.marketId === market.id);
     const map = new Map<string, string>();
     for (const p of positions) map.set(p.outcomeId, p.totalStakeKobo);
     return map;
@@ -442,22 +152,28 @@ export default function MarketDetailScreen() {
   }, [myStakeByOutcomeId]);
 
   const lockedOutcome = useMemo(
-    () =>
-      lockedOutcomeId
-        ? outcomes.find((o) => o.id === lockedOutcomeId) ?? null
-        : null,
+    () => (lockedOutcomeId ? outcomes.find((o) => o.id === lockedOutcomeId) ?? null : null),
     [lockedOutcomeId, outcomes]
   );
   const lockedOutcomeIndex = useMemo(
-    () =>
-      lockedOutcomeId
-        ? outcomes.findIndex((o) => o.id === lockedOutcomeId)
-        : -1,
+    () => (lockedOutcomeId ? outcomes.findIndex((o) => o.id === lockedOutcomeId) : -1),
     [lockedOutcomeId, outcomes]
   );
 
   const poolExists = !!market && market.totalPoolKobo !== '0';
-  const leadingIdx = useMemo(() => leadingOutcomeIndex(outcomes), [outcomes]);
+  const isOpen = market?.status === 'open' || market?.status === 'scheduled';
+  const isLocked = market?.status === 'locked';
+  const isResolved = market?.status === 'resolved';
+  const isClosed = !isOpen;
+  const isBinary = outcomes.length === 2;
+
+  const binaryColors = useMemo<[string, string]>(() => {
+    if (!isBinary) return [PULSE_YES, PULSE_NO];
+    const [a, b] = outcomes;
+    if (isYesLabel(a.label)) return [PULSE_YES, PULSE_NO];
+    if (isYesLabel(b.label)) return [PULSE_NO, PULSE_YES];
+    return [PULSE_YES, PULSE_NO];
+  }, [isBinary, outcomes]);
 
   const outcomeIndexByLabel = useMemo(() => {
     const map = new Map<string, number>();
@@ -465,78 +181,174 @@ export default function MarketDetailScreen() {
     return map;
   }, [outcomes]);
 
+  const resolveOutcomeColor = useCallback(
+    (index: number): string => {
+      if (isBinary) return binaryColors[index] ?? outcomeColor(index);
+      return outcomeColor(index);
+    },
+    [isBinary, binaryColors]
+  );
+
   const myAvatarColor = getAvatarColor(userId ?? 'me');
   const myInitial = getInitial(displayName, username ?? '?');
 
   const [betSheetOpen, setBetSheetOpen] = useState(false);
   const [selectedOutcome, setSelectedOutcome] = useState<DetailOutcome | null>(null);
   const [selectedIndex, setSelectedIndex] = useState(0);
+  const [originY, setOriginY] = useState<number | undefined>(undefined);
   const [lockedNoticeOpen, setLockedNoticeOpen] = useState(false);
   const [attemptedLabel, setAttemptedLabel] = useState<string | null>(null);
-
-  // Mirror the binary/scheme color resolution used inside MarketBody so the
-  // locked-notice sheet reads the same color the user just saw on the row.
-  const resolveOutcomeColor = useCallback(
-    (index: number): string => {
-      if (!market) return outcomeColor(index);
-      const isBinary = outcomes.length <= 2;
-      const scheme = isBinary ? getCardSchemeColors(market.id) : null;
-      return scheme ? scheme[index] ?? outcomeColor(index) : outcomeColor(index);
-    },
-    [market, outcomes.length]
-  );
 
   const [pendingLikes, setPendingLikes] = useState<Set<string>>(new Set());
   const toggleLikeMutation = useToggleLike(market?.id);
 
-  const handleToggleLike = (commentId: string) => {
-    if (pendingLikes.has(commentId)) return;
-    setPendingLikes((prev) => {
-      const next = new Set(prev);
-      next.add(commentId);
-      return next;
-    });
-    toggleLikeMutation.mutate(commentId, {
-      onSettled: () => {
-        setPendingLikes((prev) => {
-          const next = new Set(prev);
-          next.delete(commentId);
-          return next;
-        });
-      },
-    });
-  };
+  const [composerOpen, setComposerOpen] = useState(false);
+  const createCommentMutation = useCreateComment(market?.id);
 
-  const handleOutcomePress = (outcome: DetailOutcome, index: number) => {
-    // If the user is locked into a different outcome, never let them hit the
-    // API and bounce back red — show a calm explanation sheet instead.
-    if (lockedOutcomeId && lockedOutcomeId !== outcome.id) {
-      setAttemptedLabel(outcome.label);
-      setLockedNoticeOpen(true);
-      return;
-    }
-    setSelectedOutcome(outcome);
-    setSelectedIndex(index);
-    setBetSheetOpen(true);
+  const yesRef = useRef<View>(null);
+  const noRef = useRef<View>(null);
+
+  const handleToggleLike = useCallback(
+    (commentId: string) => {
+      if (pendingLikes.has(commentId)) return;
+      setPendingLikes((prev) => {
+        const next = new Set(prev);
+        next.add(commentId);
+        return next;
+      });
+      toggleLikeMutation.mutate(commentId, {
+        onSettled: () => {
+          setPendingLikes((prev) => {
+            const next = new Set(prev);
+            next.delete(commentId);
+            return next;
+          });
+        },
+      });
+    },
+    [pendingLikes, toggleLikeMutation]
+  );
+
+  const openStakeFor = useCallback(
+    (outcome: DetailOutcome, index: number, panelRef?: React.RefObject<View | null>) => {
+      if (!market) return;
+      if (!isOpen) return;
+      if (lockedOutcomeId && lockedOutcomeId !== outcome.id) {
+        setAttemptedLabel(outcome.label);
+        setLockedNoticeOpen(true);
+        return;
+      }
+      Haptics.selectionAsync().catch(() => {});
+      setSelectedOutcome(outcome);
+      setSelectedIndex(index);
+
+      const present = () => setBetSheetOpen(true);
+
+      const ref = panelRef?.current;
+      if (ref && typeof ref.measureInWindow === 'function') {
+        try {
+          ref.measureInWindow((_x, y, _w, h) => {
+            setOriginY(y + h / 2);
+            present();
+          });
+        } catch {
+          setOriginY(undefined);
+          present();
+        }
+      } else {
+        setOriginY(undefined);
+        present();
+      }
+    },
+    [market, isOpen, lockedOutcomeId]
+  );
+
+  const handleOutcomePress = (outcome: DetailOutcome) => {
+    const index = outcomes.findIndex((o) => o.id === outcome.id);
+    openStakeFor(outcome, index);
   };
 
   const handleAddToLocked = () => {
     if (!lockedOutcome || lockedOutcomeIndex < 0) return;
     setLockedNoticeOpen(false);
-    setSelectedOutcome(lockedOutcome);
-    setSelectedIndex(lockedOutcomeIndex);
-    // Slight delay so the notice sheet's exit animation doesn't fight the
-    // bet sheet's enter animation on slower devices.
-    setTimeout(() => setBetSheetOpen(true), 180);
+    setTimeout(() => openStakeFor(lockedOutcome, lockedOutcomeIndex), 180);
   };
 
+  const hasActivePosition = myStakeByOutcomeId.size > 0;
+  const composerEnabled = isOpen && hasActivePosition;
+
   const handleInputPress = () => {
-    Alert.alert('Stake first', 'You need an active bet to join the gist.');
+    if (!market) return;
+    if (!isOpen) return;
+    if (!hasActivePosition) {
+      Alert.alert('Stake first', 'You need an active bet to join the gist.');
+      return;
+    }
+    setComposerOpen(true);
   };
+
+  const handleSubmitComment = (body: string) => {
+    if (!market) return;
+    createCommentMutation.mutate(
+      { body },
+      {
+        onSuccess: () => setComposerOpen(false),
+        onError: (err) => {
+          const message =
+            (err as { response?: { data?: { message?: string } } })?.response?.data?.message ??
+            'Could not post your comment. Try again.';
+          Alert.alert('Comment failed', message);
+        },
+      }
+    );
+  };
+
+  const selectedColor =
+    selectedOutcome && isBinary
+      ? binaryColors[selectedIndex]
+      : selectedOutcome
+      ? outcomeColor(selectedIndex)
+      : Colors.brand;
+  const selectedTag = selectedOutcome ? shortTag(selectedOutcome.label) : '';
+
+  const renderComment = useCallback(
+    ({ item }: { item: Comment }) => (
+      <CommentRow
+        comment={item}
+        outcomeIndexByLabel={outcomeIndexByLabel}
+        onToggleLike={handleToggleLike}
+        isPending={pendingLikes.has(item.id)}
+        resolveColor={resolveOutcomeColor}
+      />
+    ),
+    [outcomeIndexByLabel, pendingLikes, resolveOutcomeColor, handleToggleLike]
+  );
+
+  if (isLoading) {
+    return (
+      <SafeAreaView style={styles.container} edges={['top']}>
+        <View style={styles.header}>
+          <Pressable
+            onPress={() => router.back()}
+            accessibilityRole="button"
+            accessibilityLabel="Go back"
+            hitSlop={12}
+            style={styles.backBtn}
+          >
+            <Feather name="arrow-left" size={rs.font(22)} color={Colors.text.primary} />
+          </Pressable>
+          <View />
+          <View style={{ width: rs.size(36) }} />
+        </View>
+        <View style={styles.loadingWrap}>
+          <ActivityIndicator size="small" color={Colors.brand} />
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      {/* Zone 1 — Top bar */}
       <View style={styles.header}>
         <Pressable
           onPress={() => router.back()}
@@ -545,87 +357,113 @@ export default function MarketDetailScreen() {
           hitSlop={12}
           style={styles.backBtn}
         >
-          <Feather name="arrow-left" size={rs.font(22)} color="#FFFFFF" />
+          <Feather name="arrow-left" size={rs.font(22)} color={Colors.text.primary} />
         </Pressable>
         {market ? (
           <View style={styles.categoryPill}>
             <Text style={styles.categoryText}>{market.category.toUpperCase()}</Text>
           </View>
         ) : (
-          <View style={{ flex: 1 }} />
+          <View />
         )}
-        <Text style={styles.headerCloses}>
-          {market ? formatClosesIn(market.closesAt) : ''}
-        </Text>
+        {market ? (
+          <StatusPill status={market.status} closesAt={market.closesAt} />
+        ) : (
+          <View style={{ width: rs.size(36) }} />
+        )}
       </View>
 
       <View style={styles.body}>
-        <MarketBody
-          market={market}
-          outcomes={outcomes}
-          isLoading={isLoading}
-          isError={isError}
-          poolExists={poolExists}
-          leadingIdx={leadingIdx}
-          handleOutcomePress={handleOutcomePress}
-          comments={comments}
-          commentsLoading={commentsLoading}
-          outcomeIndexByLabel={outcomeIndexByLabel}
-          handleToggleLike={handleToggleLike}
-          pendingLikes={pendingLikes}
-          myStakeByOutcomeId={myStakeByOutcomeId}
-          lockedOutcomeId={lockedOutcomeId}
-        />
-
-
-        {/* Pinned comment bar */}
-        <View
-          style={[
-            styles.inputBar,
-            { paddingBottom: insets.bottom + rs.size(10) },
-          ]}
-        >
-          <View style={[styles.avatar32, { backgroundColor: myAvatarColor }]}>
-            <Text style={styles.avatar32Text}>{myInitial}</Text>
+        {isError || !market ? (
+          <View style={styles.errorWrap}>
+            <Text style={styles.errorText}>Couldn&apos;t load this market. Try again in a moment.</Text>
           </View>
-          <Pressable
-            style={styles.inputPressable}
-            onPress={handleInputPress}
-            accessibilityRole="button"
-            accessibilityLabel="Open comment composer"
-            accessibilityHint="Requires an active bet on this market"
-          >
-            <Text style={styles.inputPlaceholder}>Drop your take...</Text>
-          </Pressable>
-        </View>
+        ) : (
+          <MarketBody
+            market={market}
+            outcomes={outcomes}
+            poolExists={poolExists}
+            isOpen={isOpen}
+            isLocked={isLocked}
+            isResolved={isResolved}
+            isClosed={isClosed}
+            isBinary={isBinary}
+            binaryColors={binaryColors}
+            resolveOutcomeColor={resolveOutcomeColor}
+            onPressOutcome={handleOutcomePress}
+            onPressYes={(o, i) => openStakeFor(o, i, yesRef)}
+            onPressNo={(o, i) => openStakeFor(o, i, noRef)}
+            yesRef={yesRef}
+            noRef={noRef}
+            selectedOutcomeId={betSheetOpen ? selectedOutcome?.id ?? null : null}
+            comments={comments}
+            commentsLoading={commentsLoading}
+            outcomeIndexByLabel={outcomeIndexByLabel}
+            renderComment={renderComment}
+            myStakeByOutcomeId={myStakeByOutcomeId}
+            lockedOutcomeId={lockedOutcomeId}
+          />
+        )}
+
+        {composerEnabled || isOpen ? (
+          <View style={[styles.inputBar, { paddingBottom: insets.bottom + rs.size(10) }]}>
+            <View style={[styles.avatar32, { backgroundColor: myAvatarColor }]}>
+              <Text style={styles.avatar32Text}>{myInitial}</Text>
+            </View>
+            <Pressable
+              style={styles.inputPressable}
+              onPress={handleInputPress}
+              accessibilityRole="button"
+              accessibilityLabel="Open comment composer"
+              accessibilityHint={
+                hasActivePosition ? 'Post a comment on this market' : 'Requires an active bet on this market'
+              }
+            >
+              <Text style={styles.inputPlaceholder}>
+                {hasActivePosition ? 'Drop your take...' : 'Stake first to join the gist'}
+              </Text>
+            </Pressable>
+          </View>
+        ) : (
+          <View style={[styles.closedFootnote, { paddingBottom: insets.bottom + rs.size(14) }]}>
+            <Feather name="lock" size={rs.font(12)} color={Colors.text.tertiary} />
+            <Text style={styles.closedFootnoteText}>
+              {isResolved
+                ? 'Market resolved · takes are read-only'
+                : 'Market closed · waiting on resolution'}
+            </Text>
+          </View>
+        )}
       </View>
 
-      <BetSheet
+      <StakeSheet
         visible={betSheetOpen}
         market={market ?? null}
         outcome={selectedOutcome}
         outcomeIndex={selectedIndex}
-        myStakeKoboOnOutcome={
-          selectedOutcome
-            ? myStakeByOutcomeId.get(selectedOutcome.id) ?? null
-            : null
-        }
+        color={selectedColor}
+        sideTag={selectedTag}
+        originY={originY}
+        myStakeKoboOnOutcome={selectedOutcome ? myStakeByOutcomeId.get(selectedOutcome.id) ?? null : null}
         onClose={() => setBetSheetOpen(false)}
+      />
+
+      <CommentComposerSheet
+        visible={composerOpen}
+        avatarColor={myAvatarColor}
+        avatarInitial={myInitial}
+        outcomeLabel={lockedOutcome?.label ?? null}
+        outcomeColor={lockedOutcomeIndex >= 0 ? resolveOutcomeColor(lockedOutcomeIndex) : Colors.brand}
+        isSubmitting={createCommentMutation.isPending}
+        onSubmit={handleSubmitComment}
+        onClose={() => setComposerOpen(false)}
       />
 
       <LockedNoticeSheet
         visible={lockedNoticeOpen}
         lockedOutcomeLabel={lockedOutcome?.label ?? null}
-        lockedOutcomeColor={
-          lockedOutcomeIndex >= 0
-            ? resolveOutcomeColor(lockedOutcomeIndex)
-            : '#FF6500'
-        }
-        lockedStakeKobo={
-          lockedOutcomeId
-            ? myStakeByOutcomeId.get(lockedOutcomeId) ?? null
-            : null
-        }
+        lockedOutcomeColor={lockedOutcomeIndex >= 0 ? resolveOutcomeColor(lockedOutcomeIndex) : Colors.brand}
+        lockedStakeKobo={lockedOutcomeId ? myStakeByOutcomeId.get(lockedOutcomeId) ?? null : null}
         attemptedOutcomeLabel={attemptedLabel}
         onAddToLocked={handleAddToLocked}
         onClose={() => setLockedNoticeOpen(false)}
@@ -634,24 +472,27 @@ export default function MarketDetailScreen() {
   );
 }
 
-// ── MarketBody ──────────────────────────────────────────────────────────────
-// Comments live in a FlashList so the row count can grow without dropping
-// frames. The market hero, stadium, stats, and section divider live in the
-// list header — they scroll with the comments but only render once.
-
 type MarketBodyProps = {
-  market: import('@/hooks/useMarket').MarketDetail | undefined;
+  market: import('@/hooks/useMarket').MarketDetail;
   outcomes: DetailOutcome[];
-  isLoading: boolean;
-  isError: boolean;
   poolExists: boolean;
-  leadingIdx: number;
-  handleOutcomePress: (o: DetailOutcome, i: number) => void;
+  isOpen: boolean;
+  isLocked: boolean;
+  isResolved: boolean;
+  isClosed: boolean;
+  isBinary: boolean;
+  binaryColors: [string, string];
+  resolveOutcomeColor: (index: number) => string;
+  onPressOutcome: (o: DetailOutcome) => void;
+  onPressYes: (o: DetailOutcome, i: number) => void;
+  onPressNo: (o: DetailOutcome, i: number) => void;
+  yesRef: React.RefObject<View | null>;
+  noRef: React.RefObject<View | null>;
+  selectedOutcomeId: string | null;
   comments: Comment[];
   commentsLoading: boolean;
   outcomeIndexByLabel: Map<string, number>;
-  handleToggleLike: (commentId: string) => void;
-  pendingLikes: Set<string>;
+  renderComment: ({ item }: { item: Comment }) => React.ReactElement;
   myStakeByOutcomeId: Map<string, string>;
   lockedOutcomeId: string | null;
 };
@@ -659,117 +500,178 @@ type MarketBodyProps = {
 function MarketBody({
   market,
   outcomes,
-  isLoading,
-  isError,
   poolExists,
-  leadingIdx,
-  handleOutcomePress,
+  isOpen,
+  isLocked,
+  isResolved,
+  isClosed,
+  isBinary,
+  binaryColors,
+  resolveOutcomeColor,
+  onPressOutcome,
+  onPressYes,
+  onPressNo,
+  yesRef,
+  noRef,
+  selectedOutcomeId,
   comments,
   commentsLoading,
-  outcomeIndexByLabel,
-  handleToggleLike,
-  pendingLikes,
+  renderComment,
   myStakeByOutcomeId,
   lockedOutcomeId,
 }: MarketBodyProps) {
-  const renderComment = useCallback(
-    ({ item }: { item: Comment }) => (
-      <CommentRow
-        comment={item}
-        outcomeIndexByLabel={outcomeIndexByLabel}
-        onToggleLike={handleToggleLike}
-        isPending={pendingLikes.has(item.id)}
-      />
-    ),
-    [outcomeIndexByLabel, handleToggleLike, pendingLikes]
-  );
+  const resolvedWinnerId: string | null = null;
 
-  if (isLoading) {
-    return (
-      <View style={styles.loadingWrap}>
-        <ActivityIndicator size="small" color="#FF6500" />
-      </View>
-    );
-  }
-  if (isError || !market) {
-    return (
-      <View style={styles.errorWrap}>
-        <Text style={styles.errorText}>
-          Couldn&apos;t load this market. Try again in a moment.
-        </Text>
-      </View>
-    );
-  }
+  const leadingIndex = useMemo(() => {
+    if (outcomes.length === 0) return 0;
+    let best = 0;
+    let bestPct = -1;
+    outcomes.forEach((o, i) => {
+      const p = Math.max(0, o.sharePercent);
+      if (p > bestPct) {
+        best = i;
+        bestPct = p;
+      }
+    });
+    return best;
+  }, [outcomes]);
 
-  const isBinary = outcomes.length <= 2;
-  const scheme = isBinary ? getCardSchemeColors(market.id) : null;
-  const getOutcomeColor = (index: number) =>
-    scheme ? (scheme[index] ?? outcomeColor(index)) : outcomeColor(index);
-  const resolvedColors = outcomes.map((_, i) => getOutcomeColor(i));
+  const leadingOutcome = outcomes[leadingIndex];
+  const trailingOutcome = outcomes[1 - leadingIndex] ?? outcomes[0];
+  const leadingPct = leadingOutcome?.sharePercent ?? 50;
+
+  const selectedSide: 'leading' | 'trailing' | null = selectedOutcomeId
+    ? selectedOutcomeId === leadingOutcome?.id
+      ? 'leading'
+      : 'trailing'
+    : null;
+
+  const panelStateFor = (o: DetailOutcome): PanelState => {
+    if (isResolved && resolvedWinnerId) {
+      return o.id === resolvedWinnerId ? 'won' : 'lost';
+    }
+    if (isLocked || isResolved || isClosed) return 'frozen';
+    if (lockedOutcomeId && lockedOutcomeId !== o.id) return 'locked';
+    if (selectedOutcomeId && selectedOutcomeId === o.id) return 'selected';
+    if (selectedOutcomeId && selectedOutcomeId !== o.id) return 'unselected';
+    return 'idle';
+  };
+
+  const yes = isBinary ? outcomes[0] : null;
+  const no = isBinary ? outcomes[1] : null;
+
+  const yesIsMine = yes ? !!myStakeByOutcomeId.get(yes.id) : false;
+  const noIsMine = no ? !!myStakeByOutcomeId.get(no.id) : false;
 
   const Header = (
     <View>
-      <View style={styles.questionBlock}>
-        <Text style={styles.question}>{market.question}</Text>
-        {market.description ? (
-          <Text style={styles.description} numberOfLines={2}>
-            {market.description}
-          </Text>
-        ) : null}
+      <View style={styles.heroBlock}>
+        <View style={styles.heroRow}>
+          <View style={styles.heroTextWrap}>
+            <Text style={styles.question}>{market.question}</Text>
+            {market.description ? (
+              <Text style={styles.heroSubtext} numberOfLines={2}>
+                {market.description}
+              </Text>
+            ) : null}
+          </View>
+          {market.imageUrl ? (
+            <View style={styles.thumbWrap}>
+              <Image
+                source={{ uri: market.imageUrl }}
+                style={styles.thumb}
+                contentFit="cover"
+                transition={250}
+                accessibilityLabel={`Image for ${market.question}`}
+              />
+            </View>
+          ) : null}
+        </View>
+
+        <View style={styles.railWrap}>
+          <PulseRail
+            leadingPercent={Math.max(0, Math.min(100, leadingPct))}
+            leadingLabel={leadingOutcome?.label ?? ''}
+            trailingLabel={trailingOutcome?.label ?? ''}
+            leadingColor={resolveOutcomeColor(leadingIndex)}
+            trailingColor={resolveOutcomeColor(1 - leadingIndex)}
+            poolExists={poolExists}
+            selectedSide={selectedSide}
+            frozen={isClosed}
+          />
+        </View>
       </View>
 
-      <View style={styles.stadium}>
-        <SplitBar outcomes={outcomes} poolExists={poolExists} colors={resolvedColors} />
-        <View style={styles.tapHintRow}>
-          <Feather name="zap" size={rs.font(11)} color="#FF6500" />
-          <Text style={styles.tapHintText}>TAP A SIDE TO STAKE</Text>
-        </View>
-        <View style={styles.outcomeList}>
-          {outcomes.map((o, i) => {
-            const myStake = myStakeByOutcomeId.get(o.id) ?? null;
-            const isOtherLocked =
-              !!lockedOutcomeId && lockedOutcomeId !== o.id;
-            return (
+      <View style={styles.decisionStage}>
+        {isBinary && yes && no ? (
+          <View style={styles.binaryRow}>
+            <View ref={yesRef} collapsable={false} style={styles.panelHost}>
+              <SidePanel
+                side={shortTag(yes.label) === 'YES' || shortTag(yes.label) === 'NO' ? (shortTag(yes.label) as 'YES' | 'NO') : 'YES'}
+                label={yes.label}
+                percent={yes.sharePercent}
+                multiplier={yes.multiplier}
+                color={binaryColors[0]}
+                state={panelStateFor(yes)}
+                isMine={yesIsMine}
+                poolExists={poolExists}
+                isLeading={leadingIndex === 0 && poolExists}
+                ctaLabel={yesIsMine ? 'Add to stake' : 'Stake'}
+                onPress={() => onPressYes(yes, 0)}
+                enterDelay={60}
+              />
+            </View>
+            <View ref={noRef} collapsable={false} style={styles.panelHost}>
+              <SidePanel
+                side={shortTag(no.label) === 'YES' || shortTag(no.label) === 'NO' ? (shortTag(no.label) as 'YES' | 'NO') : 'NO'}
+                label={no.label}
+                percent={no.sharePercent}
+                multiplier={no.multiplier}
+                color={binaryColors[1]}
+                state={panelStateFor(no)}
+                isMine={noIsMine}
+                poolExists={poolExists}
+                isLeading={leadingIndex === 1 && poolExists}
+                ctaLabel={noIsMine ? 'Add to stake' : 'Stake'}
+                onPress={() => onPressNo(no, 1)}
+                enterDelay={140}
+              />
+            </View>
+          </View>
+        ) : (
+          <View style={styles.naryStack}>
+            {outcomes.map((o, i) => (
               <OutcomeRow
                 key={o.id}
                 outcome={o}
-                index={i}
-                isLeading={poolExists && i === leadingIdx}
+                color={resolveOutcomeColor(i)}
+                mode={
+                  isResolved && resolvedWinnerId
+                    ? o.id === resolvedWinnerId
+                      ? 'won'
+                      : 'lost'
+                    : isLocked || isResolved || isClosed
+                    ? 'marketLocked'
+                    : lockedOutcomeId && lockedOutcomeId !== o.id
+                    ? 'otherLocked'
+                    : 'open'
+                }
                 poolExists={poolExists}
-                onPress={handleOutcomePress}
-                color={getOutcomeColor(i)}
-                myStakeKobo={myStake}
-                isOtherLocked={isOtherLocked}
+                myStakeKobo={myStakeByOutcomeId.get(o.id) ?? null}
+                onPress={onPressOutcome}
               />
-            );
-          })}
-        </View>
-        <PulseStrip bettorCount={market.bettorCount} />
+            ))}
+          </View>
+        )}
       </View>
 
-      <View style={styles.statsStrip}>
-        <View style={styles.statBlock}>
-          <Text style={styles.statValue}>
-            ₦{formatKoboAsNaira(market.totalPoolKobo)}
-          </Text>
-          <Text style={styles.statLabel}>POOL</Text>
-        </View>
-        <View style={styles.statSep} />
-        <View style={styles.statBlock}>
-          <Text style={styles.statValue}>{market.bettorCount}</Text>
-          <Text style={styles.statLabel}>STAKERS</Text>
-        </View>
-        <View style={styles.statSep} />
-        <View style={styles.statBlock}>
-          <Text style={styles.statValue}>
-            ₦{formatKoboAsNaira(market.minStakeKobo)}
-          </Text>
-          <Text style={styles.statLabel}>MIN BET</Text>
-        </View>
+      <View style={styles.statsBlock}>
+        <StatsStrip
+          totalPoolKobo={market.totalPoolKobo}
+          bettorCount={market.bettorCount}
+          minStakeKobo={market.minStakeKobo}
+        />
       </View>
-      <Text style={styles.feeLine}>
-        House takes {market.feeBps / 100}% · {formatClosesIn(market.closesAt)}
-      </Text>
 
       <View style={styles.crowdDivider}>
         <View style={styles.crowdLine} />
@@ -792,7 +694,7 @@ function MarketBody({
       <View style={styles.emptyComments}>
         <Text style={styles.emptyTitle}>Nobody don talk yet</Text>
         <Text style={styles.emptySubtitle}>
-          Drop a take when betting opens
+          {isOpen ? 'Drop a take when betting opens' : 'No takes were posted on this market'}
         </Text>
       </View>
     ) : null;
@@ -810,301 +712,113 @@ function MarketBody({
   );
 }
 
-
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#0A0A0A' },
+  container: { flex: 1, backgroundColor: Colors.surface.base },
   body: { flex: 1 },
   scrollContent: { paddingBottom: rs.size(120) },
 
-  // Zone 1
   header: {
-    paddingHorizontal: rs.size(20),
-    paddingVertical: rs.size(14),
+    paddingHorizontal: rs.size(16),
+    paddingVertical: rs.size(12),
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: rs.size(12),
   },
   backBtn: {
-    width: rs.size(28),
-    height: rs.size(28),
+    width: rs.size(36),
+    height: rs.size(36),
     alignItems: 'center',
     justifyContent: 'center',
+    borderRadius: rs.size(18),
   },
   categoryPill: {
-    backgroundColor: '#1A1A1A',
-    borderRadius: rs.size(20),
     paddingHorizontal: rs.size(12),
-    paddingVertical: rs.size(5),
+    paddingVertical: rs.size(6),
+    backgroundColor: Colors.surface.muted,
+    borderRadius: rs.size(999),
   },
   categoryText: {
     fontFamily: Fonts.bold,
     fontSize: rs.font(11),
-    color: '#FF6500',
-    letterSpacing: 0.5,
-  },
-  headerCloses: {
-    fontFamily: Fonts.regular,
-    fontSize: rs.font(12),
-    color: '#888888',
-  },
-
-  // Zone 2
-  questionBlock: {
-    paddingHorizontal: rs.size(20),
-    marginTop: rs.size(20),
-  },
-  question: {
-    fontFamily: Fonts.bold,
-    fontSize: rs.font(26),
-    color: '#FFFFFF',
-    lineHeight: rs.font(34),
-  },
-  description: {
-    marginTop: rs.size(6),
-    fontFamily: Fonts.regular,
-    fontSize: rs.font(13),
-    color: '#666666',
-    lineHeight: rs.font(19),
-  },
-
-  // Zone 3 — Stadium
-  stadium: {
-    marginTop: rs.size(28),
-    paddingHorizontal: rs.size(20),
-  },
-  splitBar: {
-    height: rs.size(10),
-    borderRadius: rs.size(5),
-    flexDirection: 'row',
-    overflow: 'hidden',
-    marginBottom: rs.size(20),
-  },
-  splitBarNeutral: { backgroundColor: '#222222' },
-  tapHintRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: rs.size(6),
-    marginBottom: rs.size(8),
-  },
-  tapHintText: {
-    fontFamily: Fonts.bold,
-    fontSize: rs.font(10),
-    color: '#FF6500',
+    color: Colors.text.secondary,
     letterSpacing: 1.2,
   },
-  outcomeList: {
+
+  heroBlock: {
+    paddingHorizontal: rs.size(20),
+    paddingTop: rs.size(8),
+  },
+  heroRow: {
+    flexDirection: 'row',
+    gap: rs.size(14),
+    alignItems: 'flex-start',
+  },
+  heroTextWrap: { flex: 1 },
+  question: {
+    fontFamily: Fonts.bold,
+    fontSize: rs.font(24),
+    lineHeight: rs.font(30),
+    color: Colors.text.primary,
+    letterSpacing: -0.3,
+  },
+  heroSubtext: {
+    marginTop: rs.size(8),
+    fontFamily: Fonts.regular,
+    fontSize: rs.font(13),
+    lineHeight: rs.font(19),
+    color: Colors.text.secondary,
+  },
+  thumbWrap: {
+    width: rs.size(64),
+    height: rs.size(64),
+    borderRadius: rs.size(14),
+    overflow: 'hidden',
+    backgroundColor: Colors.surface.muted,
+  },
+  thumb: { width: '100%', height: '100%' },
+
+  railWrap: {
+    marginTop: rs.size(24),
+  },
+
+  decisionStage: {
+    marginTop: rs.size(24),
+    paddingHorizontal: rs.size(20),
+  },
+  binaryRow: {
+    flexDirection: 'row',
+    gap: rs.size(12),
+  },
+  panelHost: { flex: 1 },
+  naryStack: {
     gap: rs.size(8),
   },
-  outcomeRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: rs.size(14),
-    paddingLeft: rs.size(14),
-    paddingRight: rs.size(10),
-    backgroundColor: '#0F0F0F',
-    borderRadius: rs.size(14),
-    borderWidth: 1,
-    borderColor: '#161616',
-    overflow: 'hidden',
-  },
-  outcomeRowLeading: {
-    borderColor: '#2A1A0A',
-    backgroundColor: '#120D08',
-  },
-  outcomeAccent: {
-    position: 'absolute',
-    left: 0,
-    top: 0,
-    bottom: 0,
-    width: rs.size(3),
-  },
-  outcomeLeftWrap: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  outcomeDot: {
-    width: rs.size(10),
-    height: rs.size(10),
-    borderRadius: rs.size(5),
-  },
-  outcomeLabelWrap: {
-    marginLeft: rs.size(12),
-    flexShrink: 1,
-  },
-  outcomeLabel: {
-    fontFamily: Fonts.semibold,
-    fontSize: rs.font(16),
-    color: '#FFFFFF',
-  },
-  myStakeRow: {
-    marginTop: rs.size(2),
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: rs.size(4),
-  },
-  myStakeText: {
-    fontFamily: Fonts.semibold,
-    fontSize: rs.font(11),
-    letterSpacing: 0.2,
-  },
-  lockedChip: {
-    marginLeft: rs.size(10),
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: rs.size(4),
-    backgroundColor: '#141414',
-    borderColor: '#1F1F1F',
-    borderWidth: 1,
-    borderRadius: rs.size(999),
-    paddingHorizontal: rs.size(10),
-    paddingVertical: rs.size(5),
-  },
-  lockedChipText: {
-    fontFamily: Fonts.bold,
-    fontSize: rs.font(10),
-    color: '#666666',
-    letterSpacing: 1,
-  },
-  percentLeading: {
-    fontFamily: Fonts.bold,
-    fontSize: rs.font(28),
-    color: '#FF6500',
-    marginRight: rs.size(12),
-  },
-  percentOther: {
-    fontFamily: Fonts.bold,
-    fontSize: rs.font(18),
-    color: '#4A4A4A',
-    marginRight: rs.size(12),
-  },
-  percentDash: {
-    fontFamily: Fonts.regular,
-    fontSize: rs.font(14),
-    color: '#333333',
-    marginRight: rs.size(12),
-  },
-  multiplierPill: {
-    backgroundColor: '#1A1A1A',
-    borderRadius: rs.size(8),
-    paddingHorizontal: rs.size(10),
-    paddingVertical: rs.size(4),
-    minWidth: rs.size(50),
-    alignItems: 'center',
-  },
-  multiplierText: {
-    fontFamily: Fonts.semibold,
-    fontSize: rs.font(13),
-  },
-  multiplierPlaceholder: {
-    minWidth: rs.size(50),
-  },
 
-  // Pulse strip
-  pulseStrip: {
-    marginTop: rs.size(16),
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: rs.size(6),
-  },
-  pulseDotWrap: {
-    width: rs.size(10),
-    height: rs.size(10),
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  pulseDotRing: {
-    position: 'absolute',
-    width: rs.size(10),
-    height: rs.size(10),
-    borderRadius: rs.size(5),
-    backgroundColor: '#FF6500',
-  },
-  pulseDotCore: {
-    width: rs.size(6),
-    height: rs.size(6),
-    borderRadius: rs.size(3),
-    backgroundColor: '#FF6500',
-  },
-  pulseText: {
-    fontFamily: Fonts.regular,
-    fontSize: rs.font(13),
-    color: '#888888',
-  },
-  pulseTextEmpty: {
-    fontFamily: Fonts.regular,
-    fontSize: rs.font(13),
-    color: '#444444',
-  },
-
-  // Zone 4 — Stats
-  statsStrip: {
-    marginTop: rs.size(28),
-    marginHorizontal: rs.size(20),
-    backgroundColor: '#111111',
-    borderRadius: rs.size(16),
-    paddingVertical: rs.size(14),
+  statsBlock: {
+    marginTop: rs.size(24),
     paddingHorizontal: rs.size(20),
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  statBlock: {
-    flex: 1,
-    alignItems: 'center',
-  },
-  statValue: {
-    fontFamily: Fonts.bold,
-    fontSize: rs.font(18),
-    color: '#FFFFFF',
-  },
-  statLabel: {
-    marginTop: rs.size(2),
-    fontFamily: Fonts.regular,
-    fontSize: rs.font(11),
-    color: '#555555',
-    letterSpacing: 0.6,
-  },
-  statSep: {
-    width: 1,
-    height: rs.size(28),
-    backgroundColor: '#1F1F1F',
-  },
-  feeLine: {
-    marginTop: rs.size(10),
-    paddingHorizontal: rs.size(20),
-    fontFamily: Fonts.regular,
-    fontSize: rs.font(12),
-    color: '#444444',
-    textAlign: 'center',
   },
 
-  // Zone 5
   crowdDivider: {
-    marginTop: rs.size(44),
+    marginTop: rs.size(36),
     paddingHorizontal: rs.size(20),
     flexDirection: 'row',
     alignItems: 'center',
     gap: rs.size(12),
   },
-  crowdLine: {
-    flex: 1,
-    height: 1,
-    backgroundColor: '#1A1A1A',
-  },
+  crowdLine: { flex: 1, height: 1, backgroundColor: Colors.border.hairline },
   crowdLabel: {
     fontFamily: Fonts.bold,
-    fontSize: rs.font(13),
-    color: '#666666',
+    fontSize: rs.font(12),
+    color: Colors.text.tertiary,
     letterSpacing: 1.5,
   },
 
-  // Zone 6 — Comments
   commentSkeletons: { marginTop: rs.size(12) },
   commentSkeleton: {
     height: rs.size(70),
-    backgroundColor: '#111111',
+    backgroundColor: Colors.surface.elevated,
     borderRadius: rs.size(12),
     marginHorizontal: rs.size(20),
     marginBottom: rs.size(10),
@@ -1117,24 +831,22 @@ const styles = StyleSheet.create({
   emptyTitle: {
     fontFamily: Fonts.regular,
     fontSize: rs.font(15),
-    color: '#333333',
+    color: Colors.text.disabled,
     textAlign: 'center',
   },
   emptySubtitle: {
     marginTop: rs.size(4),
     fontFamily: Fonts.regular,
     fontSize: rs.font(13),
-    color: '#2A2A2A',
+    color: Colors.border.strong,
     textAlign: 'center',
   },
-  commentList: { marginTop: rs.size(4) },
-
   commentRow: {
     paddingHorizontal: rs.size(20),
     paddingTop: rs.size(20),
     paddingBottom: rs.size(20),
     borderBottomWidth: 1,
-    borderBottomColor: '#0F0F0F',
+    borderBottomColor: Colors.border.hairline,
     flexDirection: 'row',
   },
   avatar36: {
@@ -1147,12 +859,9 @@ const styles = StyleSheet.create({
   avatar36Text: {
     fontFamily: Fonts.bold,
     fontSize: rs.font(13),
-    color: '#FFFFFF',
+    color: Colors.text.primary,
   },
-  commentBody: {
-    flex: 1,
-    marginLeft: rs.size(12),
-  },
+  commentBody: { flex: 1, marginLeft: rs.size(12) },
   commentHeader: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1161,7 +870,7 @@ const styles = StyleSheet.create({
   commentName: {
     fontFamily: Fonts.semibold,
     fontSize: rs.font(14),
-    color: '#FFFFFF',
+    color: Colors.text.primary,
   },
   betPill: {
     marginLeft: 'auto',
@@ -1195,14 +904,13 @@ const styles = StyleSheet.create({
   metaText: {
     fontFamily: Fonts.regular,
     fontSize: rs.font(11),
-    color: '#3A3A3A',
+    color: Colors.border.strong,
   },
 
-  // Pinned input
   inputBar: {
-    backgroundColor: '#080808',
+    backgroundColor: Colors.surface.sunken,
     borderTopWidth: 1,
-    borderTopColor: '#151515',
+    borderTopColor: Colors.border.hairline,
     paddingHorizontal: rs.size(16),
     paddingTop: rs.size(10),
     flexDirection: 'row',
@@ -1219,11 +927,11 @@ const styles = StyleSheet.create({
   avatar32Text: {
     fontFamily: Fonts.bold,
     fontSize: rs.font(13),
-    color: '#FFFFFF',
+    color: Colors.text.primary,
   },
   inputPressable: {
     flex: 1,
-    backgroundColor: '#151515',
+    backgroundColor: Colors.surface.muted,
     borderRadius: rs.size(20),
     height: rs.size(40),
     paddingHorizontal: rs.size(16),
@@ -1232,19 +940,35 @@ const styles = StyleSheet.create({
   inputPlaceholder: {
     fontFamily: Fonts.regular,
     fontSize: rs.font(14),
-    color: '#333333',
+    color: Colors.text.disabled,
   },
 
-  // Skeleton + error
+  closedFootnote: {
+    backgroundColor: Colors.surface.sunken,
+    borderTopWidth: 1,
+    borderTopColor: Colors.border.hairline,
+    paddingHorizontal: rs.size(20),
+    paddingTop: rs.size(14),
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: rs.size(8),
+  },
+  closedFootnoteText: {
+    fontFamily: Fonts.semibold,
+    fontSize: rs.font(12),
+    color: Colors.text.tertiary,
+    letterSpacing: 0.3,
+  },
+
+  skeletonWrap: { paddingHorizontal: rs.size(20) },
   loadingWrap: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: rs.size(64),
   },
-  skeletonWrap: { paddingHorizontal: rs.size(20) },
   skeleton: {
-    backgroundColor: '#111111',
+    backgroundColor: Colors.surface.elevated,
     borderRadius: rs.size(16),
   },
   errorWrap: {
@@ -1255,26 +979,7 @@ const styles = StyleSheet.create({
   errorText: {
     fontFamily: Fonts.regular,
     fontSize: rs.font(14),
-    color: '#888888',
+    color: Colors.text.secondary,
     textAlign: 'center',
   },
-
-  // Stake chip on outcome row
-  stakeChip: {
-    marginLeft: rs.size(10),
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: rs.size(2),
-    borderRadius: rs.size(999),
-    borderWidth: 1,
-    paddingLeft: rs.size(10),
-    paddingRight: rs.size(6),
-    paddingVertical: rs.size(5),
-  },
-  stakeChipText: {
-    fontFamily: Fonts.bold,
-    fontSize: rs.font(10),
-    letterSpacing: 1,
-  },
-
 });

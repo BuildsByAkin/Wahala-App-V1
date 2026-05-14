@@ -1,5 +1,6 @@
 // app/(tabs)/portfolio.tsx
 import React, { useCallback, useMemo, useState } from 'react';
+import { useRouter } from 'expo-router';
 import {
   Pressable,
   RefreshControl,
@@ -24,7 +25,6 @@ import {
   useMyBets,
   useMyBetsSummary,
 } from '@/features/betting';
-import { DepositSheet } from '@/features/deposits';
 import * as Haptics from 'expo-haptics';
 
 type TabKey = 'open' | 'history';
@@ -42,9 +42,14 @@ function initialsFor(name: string): string {
 }
 
 export default function PortfolioScreen() {
+  const router = useRouter();
   const { username, displayName, walletAvailableKobo } = useAuth();
   const [active, setActive] = useState<TabKey>('open');
-  const [depositOpen, setDepositOpen] = useState(false);
+
+  const onDepositPress = useCallback(() => {
+    Haptics.selectionAsync();
+    router.push('/wallet/deposit');
+  }, [router]);
 
   // Active bets only loaded when the Open tab is foregrounded — the Positions
   // stat is fed by the lightweight /me/bets/summary endpoint instead so we
@@ -172,17 +177,14 @@ export default function PortfolioScreen() {
           </View>
 
           <Pressable
-            onPress={() => {
-              Haptics.selectionAsync();
-              setDepositOpen(true);
-            }}
+            onPress={onDepositPress}
             style={({ pressed }) => [
               styles.depositButton,
               pressed && styles.depositButtonPressed,
             ]}
             accessibilityRole="button"
             accessibilityLabel="Deposit funds"
-            accessibilityHint="Opens the top-up sheet"
+            accessibilityHint="Opens the deposit screen"
           >
             <Feather name="plus" size={rs.font(16)} color="#0A0A0A" />
             <Text style={styles.depositText}>Deposit</Text>
@@ -272,10 +274,6 @@ export default function PortfolioScreen() {
         }
       />
 
-      <DepositSheet
-        visible={depositOpen}
-        onClose={() => setDepositOpen(false)}
-      />
     </SafeAreaView>
   );
 }

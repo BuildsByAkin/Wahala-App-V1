@@ -18,6 +18,7 @@ export type MarketDetail = {
   feeBps: number;
   minStakeKobo: string;
   maxStakeKobo: string;
+  imageUrl: string | null;
 };
 
 export type DetailOutcome = {
@@ -30,14 +31,28 @@ export type DetailOutcome = {
   multiplier: number | null;
 };
 
+type RawMarketDetail = Omit<MarketDetail, 'imageUrl'> & {
+  imageUrl?: string | null;
+  image_url?: string | null;
+};
+
 type MarketDetailResponse = {
   market: MarketDetail;
   outcomes: DetailOutcome[];
 };
 
+type RawMarketDetailResponse = {
+  market: RawMarketDetail;
+  outcomes: DetailOutcome[];
+};
+
 async function fetchMarket(slug: string): Promise<MarketDetailResponse> {
-  const { data } = await api.get<MarketDetailResponse>(`/markets/${slug}`);
-  return data;
+  const { data } = await api.get<RawMarketDetailResponse>(`/markets/${slug}`);
+  const { image_url, imageUrl, ...rest } = data.market;
+  return {
+    market: { ...rest, imageUrl: imageUrl ?? image_url ?? null },
+    outcomes: data.outcomes,
+  };
 }
 
 export function useMarket(slug: string | undefined) {

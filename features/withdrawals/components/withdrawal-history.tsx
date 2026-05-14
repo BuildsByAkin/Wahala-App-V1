@@ -17,11 +17,17 @@ import type {
 } from '@/features/withdrawals/api/withdrawals-api';
 import { useMyWithdrawals } from '@/features/withdrawals/hooks/use-withdrawals';
 
-const STATUS_COLOR: Record<WithdrawalStatus, { bg: string; fg: string; label: string }> = {
-  success: { bg: '#0F1F12', fg: '#5BD37A', label: 'Completed' },
-  failed: { bg: '#1F0E0E', fg: '#FF5A5A', label: 'Failed' },
-  pending: { bg: '#0E1620', fg: '#5BAEFF', label: 'Pending' },
-  abandoned: { bg: '#1A1208', fg: '#FFB561', label: 'Abandoned' },
+// User-facing labels — note `completed` reads as "Sent" since internal status
+// names mean nothing to the user.
+const STATUS_COLOR: Record<
+  WithdrawalStatus,
+  { bg: string; fg: string; label: string }
+> = {
+  pending: { bg: '#0E1620', fg: '#3B82F6', label: 'Pending' },
+  processing: { bg: '#0E1620', fg: '#3B82F6', label: 'Processing' },
+  completed: { bg: '#0F1F12', fg: '#4CAF50', label: 'Sent' },
+  failed: { bg: '#1F0E0E', fg: '#FF4444', label: 'Failed' },
+  cancelled: { bg: '#161616', fg: '#555555', label: 'Cancelled' },
 };
 
 export function WithdrawalHistory() {

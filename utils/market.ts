@@ -41,6 +41,7 @@ export type Market = {
   featured: boolean;
   outcomes: Outcome[];
   lastComment: LastComment;
+  imageUrl: string | null;
 };
 
 const AVATAR_PALETTE = [
@@ -205,25 +206,28 @@ export function shouldRenderFullCard(market: Market): boolean {
   return market.featured || market.outcomes.length > 2;
 }
 
+// N-ary outcome colors. Index 0 is intentionally NOT brand orange — orange is
+// reserved for actions. These are identity colors only.
 export const OUTCOME_PALETTE = [
-  '#FF6500',
   '#3B82F6',
-  '#8B5CF6',
-  '#10B981',
-  '#F59E0B',
+  '#A855F7',
+  '#06B6D4',
+  '#F472B6',
+  '#0EA5E9',
 ] as const;
 
 export function outcomeColor(index: number): string {
   return OUTCOME_PALETTE[index % OUTCOME_PALETTE.length];
 }
 
+// Binary side identity. Less-loaded pairs only — no green/red, no
+// good/bad coding. Deterministically picked per market so a given market
+// always reads the same colors across sessions.
 export const BINARY_COLOR_SCHEMES = [
-  ['#22C55E', '#EF4444'] as const,
-  ['#3B82F6', '#F97316'] as const,
-  ['#8B5CF6', '#EC4899'] as const,
-  ['#06B6D4', '#F59E0B'] as const,
-  ['#10B981', '#A855F7'] as const,
-  ['#F43F5E', '#38BDF8'] as const,
+  ['#3B82F6', '#F472B6'] as const, // cobalt / rose
+  ['#06B6D4', '#A855F7'] as const, // cyan / violet
+  ['#0EA5E9', '#FB7185'] as const, // sky / coral
+  ['#22D3EE', '#C084FC'] as const, // aqua / lavender
 ] as const;
 
 export type BinaryScheme = readonly [string, string];

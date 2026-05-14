@@ -26,8 +26,9 @@ export const betKeys = {
 
 export const depositKeys = {
   all: ['deposits'] as const,
-  status: (reference: string | undefined) =>
-    [...depositKeys.all, 'status', reference] as const,
+  list: () => [...depositKeys.all, 'list'] as const,
+  status: (sessionId: string | undefined) =>
+    [...depositKeys.all, 'status', sessionId] as const,
 };
 
 export const banksKeys = {

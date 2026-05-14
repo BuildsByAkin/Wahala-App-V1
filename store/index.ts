@@ -17,6 +17,7 @@ import {
 } from 'react-redux';
 
 import authReducer, { logout } from '@/features/auth/store/auth-slice';
+import depositReducer from '@/features/deposits/store/deposit-slice';
 import withdrawalReducer from '@/features/withdrawals/store/withdrawal-slice';
 import { injectLogoutAction, injectStore } from '@/lib/api/store-ref';
 import { secureStorage } from '@/lib/storage/secure-storage';
@@ -33,6 +34,11 @@ const authPersistConfig = {
     'phoneNumber',
     'walletAvailableKobo',
     'walletLockedKobo',
+    // Onboarding flags — must be persisted, otherwise the welcome screen
+    // re-shows on every cold start / login and we lose the agreement
+    // timestamp captured at signup.
+    'agreedToTermsAt',
+    'hasSeenWelcome',
   ],
 };
 
@@ -45,8 +51,18 @@ const withdrawalPersistConfig = {
   whitelist: ['selectedBankAccountId', 'bvnVerified', 'withdrawalHistory'],
 };
 
+// Persist the active deposit session so a backgrounded app can resume polling
+// on cold start. We never persist the Stripe checkoutUrl — it can expire and
+// is regenerated per attempt.
+const depositPersistConfig = {
+  key: 'deposit',
+  storage: secureStorage,
+  whitelist: ['sessionId', 'amountKobo', 'status'],
+};
+
 const rootReducer = combineReducers({
   auth: persistReducer(authPersistConfig, authReducer),
+  deposit: persistReducer(depositPersistConfig, depositReducer),
   withdrawal: persistReducer(withdrawalPersistConfig, withdrawalReducer),
 });
 

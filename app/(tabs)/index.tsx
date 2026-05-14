@@ -19,17 +19,24 @@ import Animated, {
 import { FlashList, type ListRenderItem } from '@shopify/flash-list';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Feather } from '@expo/vector-icons';
+import * as Haptics from 'expo-haptics';
 import { useRouter } from 'expo-router';
 import { Fonts } from '@/constants/fonts';
 import { rs } from '@/utils/responsive';
 import { CategoryFilter } from '@/components/home/CategoryFilter';
 import { MarketCardFull } from '@/components/home/MarketCardFull';
 import { MarketCardCompact } from '@/components/home/MarketCardCompact';
+import { useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '@/features/auth';
 import { useMarkets } from '@/hooks/useMarkets';
+import { withdrawalKeys } from '@/lib/api/query-keys';
 import { type Market, shouldRenderFullCard, uniqueCategories } from '@/utils/market';
 
 const SKELETON_HEIGHTS = [160, 120, 120];
+
+// How long to wait after mount before deciding the user has zero balance.
+// Prevents the banner flashing on cold start while /me is still in-flight.
+const FUNDING_BANNER_DELAY_MS = 30_000;
 
 // Vertical breathing room between cards. Hoisted so React doesn't re-create
 // the component on every parent render (which would defeat FlashList's
@@ -65,9 +72,39 @@ function SkeletonFeed() {
 
 export default function HomeScreen() {
   const router = useRouter();
+  const queryClient = useQueryClient();
   const [activeCategory, setActiveCategory] = useState('All');
-  const { displayName, username, refreshMe } = useAuth();
+  const { displayName, username, refreshMe, walletAvailableKobo } = useAuth();
   const greetingName = displayName?.trim() || username || 'friend';
+
+  const hasBalance = useMemo(() => {
+    if (!walletAvailableKobo) return false;
+    try {
+      return BigInt(walletAvailableKobo) > 0n;
+    } catch {
+      return false;
+    }
+  }, [walletAvailableKobo]);
+
+  // Funding-banner gating. Local-only state — `dismissedFundingBanner` does
+  // not persist (per spec, it should re-appear on next cold open until the
+  // user actually deposits). `fundingBannerReady` is flipped after a 30s
+  // delay so the banner doesn't flash before /me settles.
+  const [fundingBannerReady, setFundingBannerReady] = useState(false);
+  const [dismissedFundingBanner, setDismissedFundingBanner] = useState(false);
+
+  useEffect(() => {
+    const t = setTimeout(
+      () => setFundingBannerReady(true),
+      FUNDING_BANNER_DELAY_MS
+    );
+    return () => clearTimeout(t);
+  }, []);
+
+  const showFundingBanner =
+    fundingBannerReady &&
+    !dismissedFundingBanner &&
+    walletAvailableKobo === '0';
 
   const { markets, isLoading, isError, refetch, isRefetching } = useMarkets();
 
@@ -89,8 +126,11 @@ export default function HomeScreen() {
     return openMarkets.filter((m) => m.category === activeCategory);
   }, [openMarkets, activeCategory]);
 
-  // Silent refresh of profile + wallet whenever the app returns to the
-  // foreground. Fire-and-forget — never block the UI on it.
+  // Silent refresh of profile + wallet + withdrawal history whenever the app
+  // returns to the foreground. Fire-and-forget — never block the UI on it.
+  // Withdrawals are processed manually within a 4-hour SLA, so when the user
+  // reopens the app after an admin marks a txn as `completed`, the history
+  // badge should flip from "Pending" to "Sent" without any user action.
   const appStateRef = useRef<AppStateStatus>(AppState.currentState);
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (nextState) => {
@@ -101,12 +141,13 @@ export default function HomeScreen() {
         nextState === 'active'
       ) {
         void refreshMe();
+        queryClient.invalidateQueries({ queryKey: withdrawalKeys.list() });
       }
     });
     return () => {
       subscription.remove();
     };
-  }, [refreshMe]);
+  }, [refreshMe, queryClient]);
 
   // Reset filter if its category disappears from the dataset.
   useEffect(() => {
@@ -120,21 +161,25 @@ export default function HomeScreen() {
   // expose `shouldRenderFullCard` as a discriminator so FlashList can recycle
   // separately within each visual type.
   const renderMarket: ListRenderItem<Market> = useCallback(
-    ({ item }) => (
-      <Pressable
-        style={({ pressed }) => [styles.cardWrapper, pressed && styles.cardPressed]}
-        onPress={() => router.push(`/market/${item.slug}` as never)}
-        accessibilityRole="button"
-        accessibilityLabel={`Open market: ${item.question}`}
-      >
-        {shouldRenderFullCard(item) ? (
-          <MarketCardFull market={item} />
-        ) : (
-          <MarketCardCompact market={item} />
-        )}
-      </Pressable>
-    ),
-    [router]
+    ({ item }) => {
+      const ctaVariant: 'stake' | 'view' =
+        hasBalance && item.status === 'open' ? 'stake' : 'view';
+      return (
+        <Pressable
+          style={({ pressed }) => [styles.cardWrapper, pressed && styles.cardPressed]}
+          onPress={() => router.push(`/market/${item.slug}` as never)}
+          accessibilityRole="button"
+          accessibilityLabel={`Open market: ${item.question}`}
+        >
+          {shouldRenderFullCard(item) ? (
+            <MarketCardFull market={item} ctaVariant={ctaVariant} />
+          ) : (
+            <MarketCardCompact market={item} ctaVariant={ctaVariant} />
+          )}
+        </Pressable>
+      );
+    },
+    [router, hasBalance]
   );
 
   const ListHeader = (
@@ -155,6 +200,54 @@ export default function HomeScreen() {
           <Text style={styles.greetingBold}>{greetingName}</Text>
         </Text>
       </View>
+
+      {showFundingBanner ? (
+        <Pressable
+          onPress={() => {
+            void Haptics.selectionAsync().catch(() => {});
+            router.push('/wallet/deposit' as never);
+          }}
+          style={({ pressed }) => [
+            styles.fundingBanner,
+            pressed && styles.fundingBannerPressed,
+          ]}
+          accessibilityRole="button"
+          accessibilityLabel="Fund your wallet to start betting"
+          accessibilityHint="Opens the deposit screen"
+        >
+          <View style={styles.fundingIcon}>
+            <Feather name="zap" size={rs.size(20)} color="#000000" />
+          </View>
+          <View style={styles.fundingCopy}>
+            <Text style={styles.fundingTitle}>
+              Fund your wallet to start betting
+            </Text>
+            <Text style={styles.fundingBody}>
+              Deposit naira and place your first stake
+            </Text>
+          </View>
+          <Feather
+            name="chevron-right"
+            size={rs.size(18)}
+            color="#FF6500"
+          />
+          {/* Dismiss is a sibling Pressable so the parent press still routes
+              when the user taps the body; the × stops propagation locally. */}
+          <Pressable
+            onPress={(e) => {
+              e.stopPropagation();
+              void Haptics.selectionAsync().catch(() => {});
+              setDismissedFundingBanner(true);
+            }}
+            hitSlop={12}
+            style={styles.fundingDismiss}
+            accessibilityRole="button"
+            accessibilityLabel="Dismiss funding banner"
+          >
+            <Feather name="x" size={rs.size(20)} color="#555555" />
+          </Pressable>
+        </Pressable>
+      ) : null}
 
       <View style={styles.sectionHeader}>
         <View style={styles.sectionHeaderLeft}>
@@ -350,5 +443,57 @@ const styles = StyleSheet.create({
     fontSize: rs.font(14),
     color: '#888888',
     textAlign: 'center',
+  },
+  fundingBanner: {
+    marginHorizontal: rs.size(16),
+    marginTop: rs.size(16),
+    marginBottom: rs.size(16),
+    backgroundColor: '#111111',
+    borderRadius: rs.size(16),
+    padding: rs.size(16),
+    paddingRight: rs.size(40),
+    borderWidth: 1,
+    // Spec'd #FF650033 — 20% alpha brand orange. Kept literal because it's
+    // a one-off accent border, not part of the semantic token system.
+    borderColor: '#FF650033',
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  fundingBannerPressed: {
+    opacity: 0.85,
+  },
+  fundingIcon: {
+    width: rs.size(44),
+    height: rs.size(44),
+    borderRadius: rs.size(44) / 2,
+    backgroundColor: '#FF6500',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  fundingCopy: {
+    flex: 1,
+    marginLeft: rs.size(12),
+  },
+  fundingTitle: {
+    fontFamily: Fonts.semibold,
+    fontSize: rs.font(15),
+    color: '#FFFFFF',
+    includeFontPadding: false,
+  },
+  fundingBody: {
+    marginTop: rs.size(3),
+    fontFamily: Fonts.regular,
+    fontSize: rs.font(13),
+    color: '#666666',
+    includeFontPadding: false,
+  },
+  fundingDismiss: {
+    position: 'absolute',
+    top: rs.size(8),
+    right: rs.size(8),
+    width: rs.size(28),
+    height: rs.size(28),
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 });

@@ -10,5 +10,7 @@ export {
   setPhoneNumber,
   applyMe,
   applyWallet,
+  setAgreedToTerms,
+  setHasSeenWelcome,
   type AuthState,
 } from './store/auth-slice';

@@ -15,6 +15,7 @@ import {
 import * as Haptics from 'expo-haptics';
 import { Feather } from '@expo/vector-icons';
 
+import { Colors } from '@/constants/colors';
 import { Fonts } from '@/constants/fonts';
 import { rs } from '@/utils/responsive';
 import { outcomeColor } from '@/utils/market';
@@ -33,6 +34,10 @@ type Props = {
   market: MarketDetail | null;
   outcome: DetailOutcome | null;
   outcomeIndex: number;
+  // Side identity color for this outcome on this market. The caller resolves
+  // it (binary scheme vs n-ary palette) so the sheet matches the card the
+  // user just tapped. Falls back to OUTCOME_PALETTE if omitted.
+  outcomeColor?: string;
   // Total amount the user has already staked on THIS outcome (kobo string),
   // null/undefined if they haven't bet on it yet. When > 0 we render an
   // "Adding to your stake" banner and switch the CTA copy to "Add to stake".
@@ -48,6 +53,7 @@ export function BetSheet({
   market,
   outcome,
   outcomeIndex,
+  outcomeColor: outcomeColorProp,
   myStakeKoboOnOutcome,
   onClose,
 }: Props) {
@@ -100,7 +106,9 @@ export function BetSheet({
     }
   }, [visible, translateY, backdropOpacity]);
 
-  const color = outcome ? outcomeColor(outcomeIndex) : '#FF6500';
+  // Side identity color (cobalt, rose, etc.) — chrome only.
+  // Brand orange (Colors.brand) is reserved for ACTIONS (CTA, caret, focus).
+  const color = outcomeColorProp ?? (outcome ? outcomeColor(outcomeIndex) : Colors.brand);
 
   const minKobo = useMemo(() => safeBigInt(market?.minStakeKobo), [market]);
   const maxKobo = useMemo(() => safeBigInt(market?.maxStakeKobo), [market]);
@@ -312,7 +320,7 @@ export function BetSheet({
                   maxLength={9}
                   style={styles.input}
                   accessibilityLabel="Stake amount in naira"
-                  selectionColor={color}
+                  selectionColor={Colors.brand}
                 />
               </View>
 
@@ -407,9 +415,9 @@ export function BetSheet({
                 style={({ pressed }) => [
                   styles.submit,
                   {
-                    backgroundColor: color,
+                    backgroundColor: Colors.brand,
                     opacity:
-                      !validation.ok || isPlacing ? 0.4 : pressed ? 0.85 : 1,
+                      !validation.ok || isPlacing ? 0.4 : pressed ? 0.9 : 1,
                   },
                 ]}
               >

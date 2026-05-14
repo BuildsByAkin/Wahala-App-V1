@@ -109,6 +109,12 @@ export function AmountPane({
       >
         <Text style={sheetStyles.submitText}>Continue</Text>
       </Pressable>
+
+      <Text style={styles.slaNote} accessibilityRole="text">
+        Withdrawals are processed within 4 hours
+      </Text>
+
+      <Text style={styles.minNote}>Min: ₦200</Text>
     </>
   );
 }
@@ -172,5 +178,20 @@ const styles = StyleSheet.create({
     fontFamily: Fonts.semibold,
     fontSize: rs.font(13),
     color: '#DDDDDD',
+  },
+  slaNote: {
+    marginTop: rs.size(12),
+    fontFamily: Fonts.regular,
+    fontSize: rs.font(12),
+    color: '#555555',
+    textAlign: 'center',
+  },
+  minNote: {
+    marginTop: rs.size(6),
+    fontFamily: Fonts.regular,
+    fontSize: rs.font(11),
+    color: '#555555',
+    textAlign: 'center',
+    letterSpacing: 0.3,
   },
 });

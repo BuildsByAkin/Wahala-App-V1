@@ -1,5 +1,6 @@
 // features/betting/index.ts
 export { BetSheet } from './components/bet-sheet';
+export { StakeSheet } from './components/stake-sheet';
 export { LockedNoticeSheet } from './components/locked-notice-sheet';
 export { PositionRow } from './components/position-row';
 export { HistoryRow } from './components/history-row';

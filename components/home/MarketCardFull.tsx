@@ -1,6 +1,7 @@
 // components/home/MarketCardFull.tsx
 import React from 'react';
-import { StyleSheet, View, Text } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
+import { Image } from 'expo-image';
 import { Feather } from '@expo/vector-icons';
 import { Fonts } from '@/constants/fonts';
 import { rs } from '@/utils/responsive';
@@ -9,218 +10,208 @@ import {
   type Outcome,
   formatClosesIn,
   formatPoolKobo,
-  getMostPicked,
+  getCardSchemeColors,
   getOutcomeMultiplier,
   getOutcomePercent,
-  getUnderdog,
   hasPool,
-  getCardSchemeColors,
   isClosingSoon,
 } from '@/utils/market';
 
+export type MarketCardCtaVariant = 'stake' | 'view';
+
 interface MarketCardFullProps {
   market: Market;
+  ctaVariant?: MarketCardCtaVariant;
 }
 
-type DisplayOutcome = {
+type RankedOutcome = {
   outcome: Outcome;
-  tag: 'MOST PICKED' | 'UNDERDOG' | null;
+  stake: bigint;
 };
 
-function pickDisplayOutcomes(market: Market): { items: DisplayOutcome[]; hiddenCount: number } {
-  if (!market.outcomes || market.outcomes.length === 0) return { items: [], hiddenCount: 0 };
-
-  const poolExists = hasPool(market.totalPoolKobo);
-
-  if (market.outcomes.length <= 2) {
-    if (!poolExists) {
-      return {
-        items: market.outcomes.map((outcome) => ({ outcome, tag: null })),
-        hiddenCount: 0,
-      };
-    }
-    const top = getMostPicked(market.outcomes);
-    const under = getUnderdog(market.outcomes);
-    return {
-      items: market.outcomes.map((outcome) => {
-        if (top && outcome.id === top.id) return { outcome, tag: 'MOST PICKED' as const };
-        if (under && outcome.id === under.id && (!top || under.id !== top.id))
-          return { outcome, tag: 'UNDERDOG' as const };
-        return { outcome, tag: null };
-      }),
-      hiddenCount: 0,
-    };
-  }
-
-  const sorted = [...market.outcomes].sort((a, b) => {
-    try {
-      const sa = BigInt(a.totalStakedKobo);
-      const sb = BigInt(b.totalStakedKobo);
-      return sb > sa ? 1 : sb < sa ? -1 : 0;
-    } catch {
-      return 0;
-    }
-  });
-
-  const top2 = sorted.slice(0, 2);
-  const hiddenCount = market.outcomes.length - 2;
-  const topId = poolExists ? getMostPicked(market.outcomes)?.id : null;
-  const underId = poolExists ? getUnderdog(market.outcomes)?.id : null;
-
-  return {
-    items: top2.map((outcome) => {
-      if (topId && outcome.id === topId) return { outcome, tag: 'MOST PICKED' as const };
-      if (underId && outcome.id === underId && underId !== topId)
-        return { outcome, tag: 'UNDERDOG' as const };
-      return { outcome, tag: null };
-    }),
-    hiddenCount,
-  };
+function rankOutcomes(outcomes: Outcome[]): RankedOutcome[] {
+  return outcomes
+    .map((outcome) => {
+      let stake = 0n;
+      try {
+        stake = BigInt(outcome.totalStakedKobo);
+      } catch {
+        stake = 0n;
+      }
+      return { outcome, stake };
+    })
+    .sort((a, b) => (b.stake > a.stake ? 1 : b.stake < a.stake ? -1 : 0));
 }
 
-export const MarketCardFull: React.FC<MarketCardFullProps> = ({ market }) => {
-  const trending = market.featured;
+export const MarketCardFull: React.FC<MarketCardFullProps> = ({
+  market,
+  ctaVariant = 'view',
+}) => {
   const poolExists = hasPool(market.totalPoolKobo);
-  const { items: display, hiddenCount } = pickDisplayOutcomes(market);
   const closesLabel = formatClosesIn(market.closesAt);
   const isSoon = isClosingSoon(market.closesAt);
   const isBinary = market.outcomes.length <= 2;
-  const scheme = isBinary ? getCardSchemeColors(market.id) : null;
+  const scheme = getCardSchemeColors(market.id);
+
+  const ranked = rankOutcomes(market.outcomes);
+  const visible = ranked.slice(0, 2);
+  const hiddenCount = Math.max(0, ranked.length - 2);
+
+  const leader = visible[0];
+  const trailer = visible[1];
+  const equalSplit = !poolExists || !leader || !trailer || leader.stake === trailer.stake;
 
   return (
     <View style={styles.container}>
-      {/* Header */}
-      <View style={styles.header}>
-        <View style={styles.tags}>
-          <View style={styles.categoryTag}>
-            <Text style={styles.categoryText}>{market.category.toUpperCase()}</Text>
-          </View>
-          {trending && (
-            <View style={styles.trendingTag}>
-              <Text style={styles.trendingText}>🔥 TRENDING</Text>
-            </View>
-          )}
+      {/* 1. Meta row — category + closes-in */}
+      <View style={styles.metaRow}>
+        <View style={styles.metaLeft}>
+          <Text style={styles.category}>{market.category.toUpperCase()}</Text>
+          {market.featured && <Text style={styles.trending}>· TRENDING</Text>}
         </View>
         <View style={styles.closesIn}>
-          <Feather name="clock" size={rs.font(11)} color={isSoon ? '#FF6500' : '#555555'} />
-          <Text style={[styles.closesInText, !isSoon && styles.closesInTextNeutral]}>
+          <Feather name="clock" size={rs.font(11)} color={isSoon ? '#FF6500' : '#5A5A5A'} />
+          <Text style={[styles.closesText, isSoon && styles.closesTextUrgent]}>
             {closesLabel}
           </Text>
         </View>
       </View>
 
-      {/* Question */}
-      <Text style={styles.question}>{market.question}</Text>
+      {/* 2. Question — the dominant element */}
+      <View style={styles.questionRow}>
+        <Text style={styles.question}>{market.question}</Text>
+        {market.imageUrl ? (
+          <Image
+            source={{ uri: market.imageUrl }}
+            style={styles.thumb}
+            contentFit="cover"
+            transition={200}
+            cachePolicy="memory-disk"
+            accessibilityLabel={`Image for ${market.question}`}
+          />
+        ) : null}
+      </View>
 
-      {/* Outcome boxes */}
-      <View style={styles.outcomesWrap}>
-        <View style={styles.outcomes}>
-          {display.map(({ outcome, tag }, index) => {
-            const percent = poolExists
-              ? getOutcomePercent(outcome.totalStakedKobo, market.totalPoolKobo)
-              : null;
-            const multiplier = poolExists
-              ? getOutcomeMultiplier(outcome.totalStakedKobo, market.totalPoolKobo)
-              : null;
+      {/* 3. Outcome block — leader (~70%) + trailer (~30%) */}
+      {visible.length > 0 && (
+        <View style={styles.outcomesWrap}>
+          <View style={styles.outcomes}>
+            {visible.map((entry, index) => {
+              const accent = isBinary
+                ? (scheme[index] ?? '#888888')
+                : index === 0
+                  ? '#FF6500'
+                  : '#6B6B6B';
+              const isLeader = index === 0;
+              const flex = equalSplit ? 1 : isLeader ? 7 : 3;
 
-            let accentColor: string;
-            let bg: string;
+              const percent = poolExists
+                ? getOutcomePercent(entry.outcome.totalStakedKobo, market.totalPoolKobo)
+                : null;
+              const multiplier = poolExists
+                ? getOutcomeMultiplier(entry.outcome.totalStakedKobo, market.totalPoolKobo)
+                : null;
 
-            if (isBinary && scheme) {
-              accentColor = scheme[index] ?? '#888888';
-              bg = `${accentColor}18`;
-            } else {
-              accentColor =
-                tag === 'MOST PICKED' ? '#4CAF50' : tag === 'UNDERDOG' ? '#CE93D8' : '#888888';
-              bg =
-                tag === 'MOST PICKED'
-                  ? '#1E3A2F'
-                  : tag === 'UNDERDOG'
-                    ? '#2A1A2E'
-                    : '#1E1E1E';
-            }
-
-            return (
-              <View
-                key={outcome.id}
-                style={[
-                  styles.outcomeBox,
-                  { backgroundColor: bg, borderColor: `${accentColor}40` },
-                ]}
-              >
-                <View style={[styles.outcomeAccentBar, { backgroundColor: accentColor }]} />
-                {poolExists && tag && !isBinary && (
-                  <Text style={[styles.outcomeTag, { color: accentColor }]}>{tag}</Text>
-                )}
-                <Text style={styles.outcomeLabel}>{outcome.label}</Text>
-                {poolExists && (
-                  <View style={styles.outcomeFooter}>
-                    {percent !== null && (
-                      <Text style={[styles.percentText, { color: accentColor }]}>{percent}%</Text>
-                    )}
-                    {multiplier !== null && (
-                      <Text style={styles.multiplierText}>{multiplier}x</Text>
-                    )}
+              return (
+                <View
+                  key={entry.outcome.id}
+                  style={[
+                    styles.outcomeBox,
+                    {
+                      flex,
+                      backgroundColor: isLeader ? `${accent}1F` : '#161616',
+                      borderColor: isLeader ? `${accent}55` : '#222222',
+                    },
+                  ]}
+                >
+                  <View style={styles.outcomeRow}>
+                    <View style={[styles.dot, { backgroundColor: accent }]} />
+                    <Text
+                      style={[
+                        styles.outcomeLabel,
+                        isLeader ? styles.outcomeLabelLeader : styles.outcomeLabelTrailer,
+                      ]}
+                      numberOfLines={1}
+                    >
+                      {entry.outcome.label}
+                    </Text>
                   </View>
-                )}
-              </View>
-            );
-          })}
-        </View>
-
-        {hiddenCount > 0 && (
-          <View style={styles.moreOutcomes}>
-            <Feather name="chevron-down" size={rs.font(11)} color="#555555" />
-            <Text style={styles.moreText}>+{hiddenCount} more options</Text>
-          </View>
-        )}
-      </View>
-
-      {/* Pool row */}
-      <View style={styles.poolRow}>
-        <View style={styles.poolInfo}>
-          {poolExists ? (
-            <>
-              <Text style={styles.poolAmount}>{formatPoolKobo(market.totalPoolKobo)}</Text>
-              <Text style={styles.poolLabel}> pool</Text>
-            </>
-          ) : (
-            <Text style={styles.firstStake}>Be the first to stake</Text>
-          )}
-        </View>
-        <View style={styles.comments}>
-          <Feather name="message-square" size={rs.font(13)} color="#555555" />
-          <Text style={styles.commentCount}> {market.commentCount}</Text>
-        </View>
-      </View>
-
-      {/* Comment preview */}
-      {market.lastComment && (
-        <View style={styles.commentPreview}>
-          <View style={styles.accentBar} />
-          <View style={styles.commentContent}>
-            <View style={styles.commentHeader}>
-              <Text style={styles.username}>@{market.lastComment.username}</Text>
-              {market.lastComment.outcomeBetOn && (
-                <View style={styles.commentBadge}>
-                  <Text style={styles.commentBadgeText}>
-                    {market.lastComment.outcomeBetOn}
-                  </Text>
+                  {poolExists && (
+                    <View style={styles.outcomeMeta}>
+                      {percent !== null && (
+                        <Text
+                          style={[
+                            isLeader ? styles.percentLeader : styles.percentTrailer,
+                            { color: accent },
+                          ]}
+                        >
+                          {percent}%
+                        </Text>
+                      )}
+                      {multiplier !== null && isLeader && (
+                        <Text style={styles.multiplier}>{multiplier}x</Text>
+                      )}
+                    </View>
+                  )}
                 </View>
-              )}
-            </View>
-            <Text style={styles.commentText} numberOfLines={2}>
-              {market.lastComment.body}
-            </Text>
+              );
+            })}
           </View>
+
+          {hiddenCount > 0 && (
+            <View style={styles.moreOutcomes}>
+              <Text style={styles.moreText}>+{hiddenCount} more options</Text>
+              <Feather name="chevron-down" size={rs.font(11)} color="#5A5A5A" />
+            </View>
+          )}
         </View>
       )}
 
-      {/* CTA row */}
-      <View style={styles.ctaRow}>
-        <Text style={styles.ctaText}>View market</Text>
-        <Feather name="chevron-right" size={rs.font(14)} color="#FF6500" />
+      {/* 4. Quiet metadata strip */}
+      <View style={styles.metaStrip}>
+        {poolExists ? (
+          <Text style={styles.metaItem}>
+            <Text style={styles.metaStrong}>{formatPoolKobo(market.totalPoolKobo)}</Text>
+            <Text style={styles.metaSoft}> pool</Text>
+          </Text>
+        ) : (
+          <Text style={styles.firstStake}>Be the first to stake</Text>
+        )}
+        {market.bettorCount > 0 && (
+          <>
+            <Text style={styles.metaDot}>·</Text>
+            <Text style={styles.metaItem}>
+              <Text style={styles.metaStrong}>{market.bettorCount}</Text>
+              <Text style={styles.metaSoft}> {market.bettorCount === 1 ? 'staker' : 'stakers'}</Text>
+            </Text>
+          </>
+        )}
+        <Text style={styles.metaDot}>·</Text>
+        <View style={styles.metaInline}>
+          <Feather name="message-square" size={rs.font(11)} color="#5A5A5A" />
+          <Text style={styles.metaSoftInline}> {market.commentCount}</Text>
+        </View>
       </View>
+
+      {/* 5. Single CTA — context-dependent */}
+      <CardCta variant={ctaVariant} />
+    </View>
+  );
+};
+
+const CardCta: React.FC<{ variant: MarketCardCtaVariant }> = ({ variant }) => {
+  if (variant === 'stake') {
+    return (
+      <View style={styles.ctaStake}>
+        <Text style={styles.ctaStakeText}>Stake now</Text>
+        <Feather name="arrow-right" size={rs.font(14)} color="#0A0A0A" />
+      </View>
+    );
+  }
+  return (
+    <View style={styles.ctaView}>
+      <Text style={styles.ctaViewText}>View market</Text>
+      <Feather name="chevron-right" size={rs.font(14)} color="#FF6500" />
     </View>
   );
 };
@@ -231,61 +222,71 @@ const styles = StyleSheet.create({
     borderRadius: rs.size(16),
     padding: rs.size(16),
   },
-  header: {
+
+  // 1. Meta row
+  metaRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
   },
-  tags: {
+  metaLeft: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: rs.size(6),
+    gap: rs.size(4),
+    flexShrink: 1,
   },
-  categoryTag: {
-    backgroundColor: '#2A2A2A',
-    borderRadius: rs.size(6),
-    paddingHorizontal: rs.size(8),
-    paddingVertical: rs.size(3),
-  },
-  categoryText: {
+  category: {
     fontFamily: Fonts.bold,
     fontSize: rs.font(10),
-    color: '#AAAAAA',
-    letterSpacing: 0.5,
+    color: '#7A7A7A',
+    letterSpacing: 0.8,
   },
-  trendingTag: {
-    backgroundColor: '#FF6500',
-    borderRadius: rs.size(6),
-    paddingHorizontal: rs.size(8),
-    paddingVertical: rs.size(3),
-  },
-  trendingText: {
+  trending: {
     fontFamily: Fonts.bold,
     fontSize: rs.font(10),
-    color: '#000000',
+    color: '#FF6500',
+    letterSpacing: 0.6,
   },
   closesIn: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: rs.size(4),
   },
-  closesInText: {
-    fontFamily: Fonts.regular,
-    fontSize: rs.font(12),
-    color: '#FF6500',
+  closesText: {
+    fontFamily: Fonts.medium,
+    fontSize: rs.font(11),
+    color: '#5A5A5A',
   },
-  closesInTextNeutral: {
-    color: '#555555',
+  closesTextUrgent: {
+    color: '#FF6500',
+    fontFamily: Fonts.semibold,
+  },
+
+  // 2. Question
+  questionRow: {
+    marginTop: rs.size(10),
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: rs.size(12),
   },
   question: {
-    marginTop: rs.size(12),
+    flex: 1,
     fontFamily: Fonts.bold,
-    fontSize: rs.font(17),
+    fontSize: rs.font(18),
     color: '#FFFFFF',
-    lineHeight: rs.font(24),
+    lineHeight: rs.font(25),
+    letterSpacing: -0.2,
   },
+  thumb: {
+    width: rs.size(48),
+    height: rs.size(48),
+    borderRadius: rs.size(12),
+    backgroundColor: '#1A1A1A',
+  },
+
+  // 3. Outcome block
   outcomesWrap: {
-    marginTop: rs.size(14),
+    marginTop: rs.size(16),
     gap: rs.size(8),
   },
   outcomes: {
@@ -294,153 +295,139 @@ const styles = StyleSheet.create({
     alignItems: 'stretch',
   },
   outcomeBox: {
-    flex: 1,
+    minWidth: 0,
     borderRadius: rs.size(12),
-    padding: rs.size(12),
+    paddingVertical: rs.size(12),
+    paddingHorizontal: rs.size(12),
     borderWidth: 1,
-    overflow: 'hidden',
+    justifyContent: 'space-between',
+    gap: rs.size(8),
   },
-  outcomeAccentBar: {
-    position: 'absolute',
-    left: 0,
-    top: 0,
-    bottom: 0,
-    width: rs.size(3),
-    borderTopLeftRadius: rs.size(12),
-    borderBottomLeftRadius: rs.size(12),
+  outcomeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: rs.size(7),
   },
-  outcomeTag: {
-    fontFamily: Fonts.semibold,
-    fontSize: rs.font(9),
-    letterSpacing: 0.8,
+  dot: {
+    width: rs.size(7),
+    height: rs.size(7),
+    borderRadius: rs.size(4),
   },
   outcomeLabel: {
-    fontFamily: Fonts.bold,
-    fontSize: rs.font(17),
     color: '#FFFFFF',
-    marginTop: rs.size(2),
-    marginLeft: rs.size(4),
+    flexShrink: 1,
   },
-  outcomeFooter: {
+  outcomeLabelLeader: {
+    fontFamily: Fonts.bold,
+    fontSize: rs.font(16),
+  },
+  outcomeLabelTrailer: {
+    fontFamily: Fonts.semibold,
+    fontSize: rs.font(13),
+    color: '#BFBFBF',
+  },
+  outcomeMeta: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginTop: rs.size(6),
-    marginLeft: rs.size(4),
+    gap: rs.size(6),
   },
-  percentText: {
+  percentLeader: {
     fontFamily: Fonts.bold,
-    fontSize: rs.font(15),
+    fontSize: rs.font(16),
   },
-  multiplierText: {
+  percentTrailer: {
+    fontFamily: Fonts.semibold,
+    fontSize: rs.font(12),
+  },
+  multiplier: {
     fontFamily: Fonts.medium,
     fontSize: rs.font(11),
-    color: '#555555',
+    color: '#6B6B6B',
   },
   moreOutcomes: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: rs.size(4),
-    backgroundColor: '#1A1A1A',
-    borderRadius: rs.size(10),
-    paddingVertical: rs.size(8),
-    borderWidth: 1,
-    borderColor: '#242424',
+    paddingVertical: rs.size(6),
   },
   moreText: {
     fontFamily: Fonts.medium,
-    fontSize: rs.font(12),
-    color: '#555555',
+    fontSize: rs.font(11),
+    color: '#5A5A5A',
+    letterSpacing: 0.2,
   },
-  poolRow: {
+
+  // 4. Metadata strip
+  metaStrip: {
     marginTop: rs.size(14),
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
+    flexWrap: 'wrap',
   },
-  poolInfo: {
+  metaItem: {
+    fontSize: rs.font(12),
+  },
+  metaStrong: {
+    fontFamily: Fonts.semibold,
+    fontSize: rs.font(12),
+    color: '#BFBFBF',
+  },
+  metaSoft: {
+    fontFamily: Fonts.regular,
+    fontSize: rs.font(12),
+    color: '#5A5A5A',
+  },
+  metaSoftInline: {
+    fontFamily: Fonts.regular,
+    fontSize: rs.font(12),
+    color: '#5A5A5A',
+  },
+  metaInline: {
     flexDirection: 'row',
     alignItems: 'center',
   },
-  poolAmount: {
-    fontFamily: Fonts.bold,
-    fontSize: rs.font(13),
-    color: '#FFFFFF',
-  },
-  poolLabel: {
+  metaDot: {
     fontFamily: Fonts.regular,
-    fontSize: rs.font(13),
-    color: '#555555',
+    fontSize: rs.font(12),
+    color: '#3A3A3A',
+    paddingHorizontal: rs.size(6),
   },
   firstStake: {
-    fontFamily: Fonts.medium,
-    fontSize: rs.font(13),
+    fontFamily: Fonts.semibold,
+    fontSize: rs.font(12),
     color: '#FF6500',
   },
-  comments: {
+
+  // 5. CTA
+  ctaStake: {
+    marginTop: rs.size(14),
+    backgroundColor: '#FF6500',
+    borderRadius: rs.size(12),
+    paddingVertical: rs.size(11),
     flexDirection: 'row',
     alignItems: 'center',
-  },
-  commentCount: {
-    fontFamily: Fonts.regular,
-    fontSize: rs.font(13),
-    color: '#555555',
-  },
-  commentPreview: {
-    marginTop: rs.size(12),
-    flexDirection: 'row',
-  },
-  accentBar: {
-    width: rs.size(3),
-    borderRadius: rs.size(2),
-    backgroundColor: '#2A2A2A',
-    marginRight: rs.size(10),
-  },
-  commentContent: {
-    flex: 1,
-  },
-  commentHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    justifyContent: 'center',
     gap: rs.size(6),
   },
-  username: {
-    fontFamily: Fonts.semibold,
-    fontSize: rs.font(12),
-    color: '#777777',
+  ctaStakeText: {
+    fontFamily: Fonts.bold,
+    fontSize: rs.font(13),
+    color: '#0A0A0A',
+    letterSpacing: 0.2,
   },
-  commentBadge: {
-    backgroundColor: '#1E1E1E',
-    borderRadius: rs.size(4),
-    paddingHorizontal: rs.size(6),
-    paddingVertical: rs.size(2),
-    borderWidth: 1,
-    borderColor: '#2A2A2A',
-  },
-  commentBadgeText: {
-    fontFamily: Fonts.semibold,
-    fontSize: rs.font(11),
-    color: '#666666',
-  },
-  commentText: {
-    marginTop: rs.size(4),
-    fontFamily: Fonts.regular,
-    fontSize: rs.font(12),
-    color: '#555555',
-    lineHeight: rs.font(17),
-  },
-  ctaRow: {
-    marginTop: rs.size(12),
+  ctaView: {
+    marginTop: rs.size(14),
     paddingTop: rs.size(12),
     borderTopWidth: 1,
-    borderTopColor: '#1E1E1E',
+    borderTopColor: '#1F1F1F',
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'flex-end',
     gap: rs.size(3),
   },
-  ctaText: {
+  ctaViewText: {
     fontFamily: Fonts.semibold,
     fontSize: rs.font(12),
     color: '#FF6500',

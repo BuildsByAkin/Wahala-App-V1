@@ -5,23 +5,33 @@ import { api } from '@/lib/api/axios';
 import { marketKeys } from '@/lib/api/query-keys';
 import type { Market } from '@/utils/market';
 
+type RawMarket = Omit<Market, 'imageUrl'> & {
+  imageUrl?: string | null;
+  image_url?: string | null;
+};
+
 type MarketsResponse =
-  | Market[]
-  | { markets: Market[] }
-  | { data: Market[] };
+  | RawMarket[]
+  | { markets: RawMarket[] }
+  | { data: RawMarket[] };
+
+function normalize(m: RawMarket): Market {
+  const { image_url, imageUrl, ...rest } = m;
+  return { ...rest, imageUrl: imageUrl ?? image_url ?? null };
+}
 
 async function fetchMarkets(): Promise<Market[]> {
   const { data } = await api.get<MarketsResponse>('/markets', {
     params: { limit: 20, offset: 0 },
   });
-  if (Array.isArray(data)) return data;
-  if (data && Array.isArray((data as { markets?: Market[] }).markets)) {
-    return (data as { markets: Market[] }).markets;
+  let raw: RawMarket[] = [];
+  if (Array.isArray(data)) raw = data;
+  else if (data && Array.isArray((data as { markets?: RawMarket[] }).markets)) {
+    raw = (data as { markets: RawMarket[] }).markets;
+  } else if (data && Array.isArray((data as { data?: RawMarket[] }).data)) {
+    raw = (data as { data: RawMarket[] }).data;
   }
-  if (data && Array.isArray((data as { data?: Market[] }).data)) {
-    return (data as { data: Market[] }).data;
-  }
-  return [];
+  return raw.map(normalize);
 }
 
 export function useMarkets() {

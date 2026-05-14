@@ -58,11 +58,16 @@ export type VerifyBvnResult = {
 };
 
 // ── Withdrawals ────────────────────────────────────────────────────────────
+// Backend-aligned status set. Withdrawals are now processed manually within
+// a 4-hour SLA, so `pending` is the dominant happy-path state. `processing`
+// is a transient admin-side flag. Terminal states: completed | failed |
+// cancelled. (`abandoned` is no longer used.)
 export type WithdrawalStatus =
   | 'pending'
-  | 'success'
+  | 'processing'
+  | 'completed'
   | 'failed'
-  | 'abandoned';
+  | 'cancelled';
 
 export type Withdrawal = {
   id: string;
@@ -178,7 +183,7 @@ export const withdrawalsApi = {
 };
 
 // Server-enforced bounds, mirrored client-side for instant validation.
-export const WITHDRAWAL_MIN_KOBO = 10_000n; // ₦100
+export const WITHDRAWAL_MIN_KOBO = 20_000n; // ₦200
 export const WITHDRAWAL_MAX_KOBO = 50_000_000n; // ₦500,000
 export const BVN_REQUIRED_THRESHOLD_KOBO = 1_000_000n; // ₦10,000
 

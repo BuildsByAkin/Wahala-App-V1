@@ -40,6 +40,8 @@ SplashScreen.preventAutoHideAsync().catch(() => {
   /* noop */
 });
 
+
+
 function AuthGate() {
   const router = useRouter();
   const segments = useSegments();

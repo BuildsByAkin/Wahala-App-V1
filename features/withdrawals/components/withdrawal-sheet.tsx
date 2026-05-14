@@ -8,6 +8,12 @@
 // ₦10,000 threshold AND the user is not yet verified. PIN and BVN digits
 // live in component state ONLY and are wiped immediately after their
 // respective API calls.
+//
+// Settlement model: withdrawals are processed manually by an admin against
+// OPay within a 4-hour SLA. We do NOT poll. After POST /withdrawals succeeds
+// we fire a single status check ~5s later (handled by useWithdrawalStatusOnce)
+// and then advance to the result screen — almost always landing on the
+// `pending` variant that explains the 4-hour window.
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
@@ -37,11 +43,13 @@ import {
   nairaTextToKobo,
 } from '@/features/withdrawals/api/withdrawals-api';
 import { useBvnStatus } from '@/features/withdrawals/hooks/use-bvn';
+import { useBankAccounts } from '@/features/withdrawals/hooks/use-bank-accounts';
 import {
   extractWithdrawalError,
   useInitiateWithdrawal,
-  useWithdrawalStatus,
+  useWithdrawalStatusOnce,
 } from '@/features/withdrawals/hooks/use-withdrawals';
+import type { Withdrawal } from '@/features/withdrawals/api/withdrawals-api';
 import { setSelectedBankAccountId } from '@/features/withdrawals/store/withdrawal-slice';
 import { sheetStyles } from './sheet-styles';
 import { AmountPane } from './panes/amount-pane';
@@ -90,6 +98,11 @@ export function WithdrawalSheet({ visible, onClose }: Props) {
   // the very first render. The hook mirrors `verified` into Redux.
   useBvnStatus({ enabled: visible });
 
+  // Bank accounts are already prefetched when the account pane mounts; we
+  // also need the selected row here to render the destination on the result
+  // screen ("Sterling Bank •••• 1234").
+  const { data: bankAccounts } = useBankAccounts({ enabled: visible });
+
   const initiateMutation = useInitiateWithdrawal();
 
   // ── Step state ──────────────────────────────────────────────────────────
@@ -98,42 +111,46 @@ export function WithdrawalSheet({ visible, onClose }: Props) {
   const [paymentTransactionId, setPaymentTransactionId] = useState<
     string | undefined
   >();
-  // Result-pane data captured from the initiate response, plus any timeout flag.
-  const [estFeeKobo, setEstFeeKobo] = useState<string | null>(null);
-  const [resultOverride, setResultOverride] = useState<
-    'pending-timeout' | null
-  >(null);
+  // Estimated net (what the user actually receives) captured from the initiate
+  // response so the result pane can render it without waiting on /withdrawals/:id.
+  const [estNetKobo, setEstNetKobo] = useState<string | null>(null);
+  // Settled record (from the single delayed status check OR a synchronous
+  // failure on initiate). If null when we land on result, we render the
+  // `pending` variant by default — the dominant happy path.
+  const [statusRecord, setStatusRecord] = useState<Withdrawal | null>(null);
 
   const amountKobo = useMemo(() => nairaTextToKobo(amountText), [amountText]);
   const steps = useMemo(
     () => buildSteps(amountKobo, bvnVerifiedRedux),
     [amountKobo, bvnVerifiedRedux]
   );
+  const selectedBankAccount = useMemo(
+    () =>
+      bankAccounts?.find((a) => a.id === selectedBankAccountId) ?? null,
+    [bankAccounts, selectedBankAccountId]
+  );
 
-  // ── Polling ─────────────────────────────────────────────────────────────
-  const statusQuery = useWithdrawalStatus({
+  // ── One-shot status check ──────────────────────────────────────────────
+  // Fires exactly once, ~5s after we land on the processing step. The hook
+  // cleans up its setTimeout on unmount / when `enabled` flips false.
+  useWithdrawalStatusOnce({
     paymentTransactionId,
     enabled: step === 'processing',
-    onTimeout: () => {
-      setResultOverride('pending-timeout');
+    onSettled: (record) => {
+      if (record) {
+        setStatusRecord(record);
+        if (record.status === 'completed') {
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        } else if (record.status === 'failed') {
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+        }
+      }
+      // Whether the check succeeded or failed, advance to result. A null
+      // record falls through to the pending variant, which is honest UX —
+      // the txn was accepted by the server (we wouldn't be here otherwise).
       setStep('result');
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
     },
   });
-
-  // Auto-advance from processing → result when a terminal state arrives.
-  useEffect(() => {
-    if (step !== 'processing') return;
-    const s = statusQuery.data?.status;
-    if (s === 'success' || s === 'failed' || s === 'abandoned') {
-      Haptics.notificationAsync(
-        s === 'success'
-          ? Haptics.NotificationFeedbackType.Success
-          : Haptics.NotificationFeedbackType.Error
-      );
-      setStep('result');
-    }
-  }, [step, statusQuery.data?.status]);
 
   // ── Lifecycle ───────────────────────────────────────────────────────────
   useEffect(() => {
@@ -142,8 +159,8 @@ export function WithdrawalSheet({ visible, onClose }: Props) {
       setStep('amount');
       setAmountText('');
       setPaymentTransactionId(undefined);
-      setEstFeeKobo(null);
-      setResultOverride(null);
+      setEstNetKobo(null);
+      setStatusRecord(null);
       initiateMutation.reset();
       Animated.parallel([
         Animated.timing(backdropOpacity, {
@@ -171,7 +188,7 @@ export function WithdrawalSheet({ visible, onClose }: Props) {
   const amountValidation = useMemo(() => {
     if (amountKobo === null || amountKobo <= 0n) return { ok: false, reason: '' };
     if (amountKobo < WITHDRAWAL_MIN_KOBO) {
-      return { ok: false, reason: 'Minimum withdrawal is ₦100' };
+      return { ok: false, reason: 'Minimum withdrawal is ₦200' };
     }
     if (amountKobo > WITHDRAWAL_MAX_KOBO) {
       return { ok: false, reason: 'Maximum withdrawal is ₦500,000' };
@@ -227,30 +244,34 @@ export function WithdrawalSheet({ visible, onClose }: Props) {
       });
       // SECURITY: pin is wiped at the call site (PinPane) immediately after
       // this resolves, regardless of outcome. Do not retain it here.
-      setEstFeeKobo(result.estimatedFeeKobo);
+      setEstNetKobo(result.estimatedNetKobo);
+      setPaymentTransactionId(result.paymentTransactionId);
+
       if (result.status === 'failed') {
-        setPaymentTransactionId(result.paymentTransactionId);
-        // Pre-seed the status query so the result pane can read failureReason.
+        // Edge case: initiate refused synchronously. Skip the processing
+        // pane entirely and synthesise the record the result pane needs.
+        const synthetic: Withdrawal = {
+          id: result.paymentTransactionId,
+          reference: '',
+          status: 'failed',
+          amountKobo: amountKobo.toString(),
+          feeKobo: result.estimatedFeeKobo,
+          netAmountKobo: result.estimatedNetKobo,
+          failureReason: result.failureReason ?? null,
+          bankAccountId: selectedBankAccountId,
+          createdAt: new Date().toISOString(),
+          completedAt: null,
+        };
         queryClient.setQueryData(
           withdrawalKeys.status(result.paymentTransactionId),
-          {
-            id: result.paymentTransactionId,
-            reference: '',
-            status: 'failed' as const,
-            amountKobo: amountKobo.toString(),
-            feeKobo: result.estimatedFeeKobo,
-            netAmountKobo: result.estimatedNetKobo,
-            failureReason: result.failureReason ?? null,
-            bankAccountId: selectedBankAccountId,
-            createdAt: new Date().toISOString(),
-            completedAt: null,
-            __attempts: 0,
-          }
+          synthetic
         );
+        setStatusRecord(synthetic);
         setStep('result');
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       } else {
-        setPaymentTransactionId(result.paymentTransactionId);
+        // Happy path. The one-shot status check (5s later) will advance us
+        // to the result screen via the hook above.
         setStep('processing');
       }
     } catch {
@@ -368,35 +389,30 @@ export function WithdrawalSheet({ visible, onClose }: Props) {
             )}
 
             {step === 'processing' && (
-              <ProcessingPane
-                amountKobo={amountKobo?.toString() ?? '0'}
-                statusError={
-                  statusQuery.isError
-                    ? "Couldn't reach the server. Retrying…"
-                    : null
-                }
-              />
+              <ProcessingPane amountKobo={amountKobo?.toString() ?? '0'} />
             )}
 
             {step === 'result' && (
               <ResultPane
-                status={
-                  resultOverride === 'pending-timeout'
-                    ? 'pending'
-                    : (statusQuery.data?.status ?? 'pending')
+                // No status record → we never heard back from the one-shot
+                // check. Treat as pending (the dominant happy path).
+                status={statusRecord?.status ?? 'pending'}
+                netAmountKobo={
+                  statusRecord?.netAmountKobo ?? estNetKobo ?? '0'
                 }
-                amountKobo={
-                  statusQuery.data?.amountKobo ??
-                  amountKobo?.toString() ??
-                  '0'
+                bankName={selectedBankAccount?.bankName ?? null}
+                last4={
+                  selectedBankAccount
+                    ? selectedBankAccount.accountNumber.slice(-4)
+                    : null
                 }
-                feeKobo={statusQuery.data?.feeKobo ?? estFeeKobo ?? '0'}
-                failureReason={statusQuery.data?.failureReason ?? null}
+                failureReason={statusRecord?.failureReason ?? null}
                 onDismiss={handleResultDismiss}
                 onRetry={() => {
-                  setResultOverride(null);
                   setStep('amount');
                   setPaymentTransactionId(undefined);
+                  setStatusRecord(null);
+                  setEstNetKobo(null);
                   initiateMutation.reset();
                 }}
               />

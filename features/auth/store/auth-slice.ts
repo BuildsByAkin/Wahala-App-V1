@@ -26,6 +26,13 @@ export type AuthState = {
   // True once redux-persist has rehydrated this slice from SecureStore.
   // Routing gates should never make decisions before this flips to true.
   hydrated: boolean;
+  // ISO timestamp set the moment the user accepts T&C + Privacy at signup.
+  // Existing users who signed up before this field shipped will have `null`
+  // — that's intentional, we never retroactively block them.
+  agreedToTermsAt: string | null;
+  // One-time welcome screen flag. Persisted so it never shows twice for the
+  // same install. Survives logout — if the user logs back in we still skip it.
+  hasSeenWelcome: boolean;
 };
 
 const initialState: AuthState = {
@@ -39,6 +46,8 @@ const initialState: AuthState = {
   walletAvailableKobo: null,
   walletLockedKobo: null,
   hydrated: false,
+  agreedToTermsAt: null,
+  hasSeenWelcome: false,
 };
 
 const authSlice = createSlice({
@@ -103,6 +112,17 @@ const authSlice = createSlice({
       state.walletAvailableKobo = action.payload.availableKobo;
       state.walletLockedKobo = action.payload.lockedKobo;
     },
+    // Captured at signup completion only — never on login. The timestamp
+    // gives us a defensible audit trail of when the user accepted the
+    // current terms.
+    setAgreedToTerms: (state, action: PayloadAction<string | null>) => {
+      state.agreedToTermsAt = action.payload;
+    },
+    // Flipped to true the first time the welcome screen is dismissed
+    // (either CTA). Persisted, so it never re-shows on this install.
+    setHasSeenWelcome: (state, action: PayloadAction<boolean>) => {
+      state.hasSeenWelcome = action.payload;
+    },
   },
 });
 
@@ -113,6 +133,8 @@ export const {
   setPhoneNumber,
   applyMe,
   applyWallet,
+  setAgreedToTerms,
+  setHasSeenWelcome,
 } = authSlice.actions;
 
 export default authSlice.reducer;

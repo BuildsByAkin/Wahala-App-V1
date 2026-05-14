@@ -9,6 +9,7 @@
 import { useCallback, useState } from 'react';
 import {
   Pressable,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
@@ -23,17 +24,40 @@ import { Fonts } from '@/constants/fonts';
 import { rs } from '@/utils/responsive';
 import { formatKoboAsNaira } from '@/lib/utils/money';
 import { useAuth } from '@/features/auth';
-import { WithdrawalHistory, WithdrawalSheet } from '@/features/withdrawals';
+import {
+  WithdrawalHistory,
+  WithdrawalSheet,
+  useMyWithdrawals,
+} from '@/features/withdrawals';
 
 export default function WithdrawScreen() {
   const router = useRouter();
-  const { walletAvailableKobo } = useAuth();
+  const { walletAvailableKobo, refreshMe } = useAuth();
   const [sheetVisible, setSheetVisible] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+
+  // Cache-sharing — calling the same hook the inner WithdrawalHistory uses
+  // gives us the same query instance (no duplicate request) plus a refetch
+  // handle to drive the pull-to-refresh spinner from this screen.
+  const { refetch: refetchWithdrawals } = useMyWithdrawals();
 
   const onWithdrawPress = useCallback(() => {
     Haptics.selectionAsync();
     setSheetVisible(true);
   }, []);
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      // Refresh wallet balance in parallel with history — the user pulled
+      // because they expect both to be current.
+      await Promise.allSettled([refetchWithdrawals(), refreshMe()]);
+    } finally {
+      // `finally` guarantees the spinner is dismissed even if a request
+      // throws — TanStack returns rejected promises on network errors.
+      setRefreshing(false);
+    }
+  }, [refetchWithdrawals, refreshMe]);
 
   const onBack = useCallback(() => {
     if (router.canGoBack()) router.back();
@@ -59,6 +83,14 @@ export default function WithdrawScreen() {
       <ScrollView
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor="#FF6500"
+            colors={['#FF6500']}
+          />
+        }
       >
         <View style={styles.balanceBlock}>
           <Text style={styles.balanceLabel}>AVAILABLE BALANCE</Text>

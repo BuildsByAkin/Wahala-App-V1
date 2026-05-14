@@ -1,13 +1,20 @@
 // features/withdrawals/hooks/use-withdrawals.ts
 //
 // Three concerns wired together:
-//   - useInitiateWithdrawal: mutation. Caller wipes PIN immediately after.
-//   - useWithdrawalStatus:   bounded poll (3s × max 10 attempts) used only on
-//                            the processing pane. Polling halts on any
-//                            terminal status or when `enabled` flips false.
-//   - useMyWithdrawals:      list, mirrored into Redux for cold-start render.
-import { useEffect } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+//   - useInitiateWithdrawal:       mutation. Caller wipes PIN immediately after.
+//   - useWithdrawalStatusOnce:     ONE delayed GET /withdrawals/:id ~5s after
+//                                  initiation. Withdrawals are now processed
+//                                  manually within a 4-hour SLA, so polling
+//                                  doesn't make sense — we just confirm the
+//                                  txn was accepted (almost always `pending`)
+//                                  and move to the result screen.
+//   - useMyWithdrawals:            list, mirrored into Redux for cold-start render.
+import { useEffect, useRef } from 'react';
+import {
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query';
 
 import { extractApiError } from '@/lib/api/axios';
 import { withdrawalKeys } from '@/lib/api/query-keys';
@@ -39,69 +46,64 @@ export function useInitiateWithdrawal() {
   });
 }
 
-const POLL_INTERVAL_MS = 3_000;
-const POLL_MAX_ATTEMPTS = 10;
+const STATUS_CHECK_DELAY_MS = 5_000;
 
-type StatusOpts = {
+type StatusOnceOpts = {
   paymentTransactionId: string | undefined;
-  enabled?: boolean;
-  // Notified when the poll budget is exhausted — caller can flip to "pending"
-  // result UI without ever marking the txn as failed.
-  onTimeout?: () => void;
+  enabled: boolean;
+  delayMs?: number;
+  // Invoked once with the fetched record, or with `null` if the request
+  // failed. Caller advances the UI to the result pane regardless of outcome.
+  onSettled: (record: Withdrawal | null) => void;
 };
 
 /**
- * Poll a single withdrawal until it reaches a terminal state OR until we've
- * burned through the attempt budget. The `attempts` counter is held inside
- * the React Query cache via `meta` so it survives refetches without leaking
- * via component refs.
+ * Fire EXACTLY ONE status check ~5s after initiation, then call `onSettled`.
+ * No polling, no retries on a schedule — the txn lives in the backend's
+ * manual-processing queue and resolves out-of-band over the next 4 hours.
+ *
+ * Cleans up its `setTimeout` and ignores late responses if the component
+ * unmounts or `enabled` flips false before the request resolves.
  */
-export function useWithdrawalStatus({
+export function useWithdrawalStatusOnce({
   paymentTransactionId,
-  enabled = true,
-  onTimeout,
-}: StatusOpts) {
+  enabled,
+  delayMs = STATUS_CHECK_DELAY_MS,
+  onSettled,
+}: StatusOnceOpts) {
   const qc = useQueryClient();
+  const settledRef = useRef(onSettled);
+  settledRef.current = onSettled;
 
-  const query = useQuery<Withdrawal & { __attempts?: number }>({
-    queryKey: withdrawalKeys.status(paymentTransactionId),
-    queryFn: async () => {
-      const result = await withdrawalsApi.getStatus(paymentTransactionId!);
-      const prev = qc.getQueryData<{ __attempts?: number }>(
-        withdrawalKeys.status(paymentTransactionId)
-      );
-      const attempts = (prev?.__attempts ?? 0) + 1;
-      return { ...result, __attempts: attempts };
-    },
-    enabled: enabled && !!paymentTransactionId,
-    staleTime: 0,
-    gcTime: 30_000,
-    refetchInterval: (q) => {
-      const data = q.state.data;
-      if (!data) return POLL_INTERVAL_MS;
-      if (data.status !== 'pending') return false;
-      if ((data.__attempts ?? 0) >= POLL_MAX_ATTEMPTS) return false;
-      return POLL_INTERVAL_MS;
-    },
-    refetchOnWindowFocus: false,
-    retry: 2,
-  });
-
-  // Surface timeout to the caller so the UI can advance to a "pending" result.
   useEffect(() => {
-    if (!enabled) return;
-    const data = query.data;
-    if (
-      data &&
-      data.status === 'pending' &&
-      (data.__attempts ?? 0) >= POLL_MAX_ATTEMPTS
-    ) {
-      onTimeout?.();
-    }
-  }, [enabled, query.data, onTimeout]);
+    if (!enabled || !paymentTransactionId) return;
 
-  return query;
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      try {
+        const data = await withdrawalsApi.getStatus(paymentTransactionId);
+        if (cancelled) return;
+        // Prime the cache so the result pane reads the same shape regardless
+        // of whether data came from this check or a synchronous failure.
+        qc.setQueryData(withdrawalKeys.status(paymentTransactionId), data);
+        settledRef.current(data);
+      } catch {
+        if (cancelled) return;
+        settledRef.current(null);
+      }
+    }, delayMs);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [enabled, paymentTransactionId, delayMs, qc]);
 }
+
+// How often to refetch the list while at least one withdrawal is still in a
+// non-terminal state (pending | processing). Bounded by foreground only —
+// the moment the app backgrounds, polling stops.
+const PENDING_REFETCH_INTERVAL_MS = 30_000;
 
 export function useMyWithdrawals(options?: { enabled?: boolean }) {
   const dispatch = useAppDispatch();
@@ -112,6 +114,18 @@ export function useMyWithdrawals(options?: { enabled?: boolean }) {
     staleTime: 60_000,
     gcTime: 5 * 60_000,
     enabled: options?.enabled ?? true,
+    // Quietly refresh every 30s ONLY when there is at least one row the admin
+    // could still flip. Returns false (no interval) on first load (data
+    // undefined) and the moment everything reaches a terminal state.
+    refetchInterval: (q) => {
+      const data = q.state.data;
+      if (!data || data.length === 0) return false;
+      const hasPending = data.some(
+        (w) => w.status === 'pending' || w.status === 'processing'
+      );
+      return hasPending ? PENDING_REFETCH_INTERVAL_MS : false;
+    },
+    refetchIntervalInBackground: false,
   });
 
   useEffect(() => {
