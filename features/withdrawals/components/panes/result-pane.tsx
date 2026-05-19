@@ -9,14 +9,17 @@
 // `cancelled` and `processing` from the backend status enum fall through to
 // the pending visual — both are non-terminal from the user's perspective and
 // the history list is where the precise badge is shown.
-import React from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
-import { Feather } from '@expo/vector-icons';
+import React, { useEffect } from 'react';
+import { StyleSheet, Text, View } from 'react-native';
 
+import { Colors } from '@/constants/colors';
 import { Fonts } from '@/constants/fonts';
 import { rs } from '@/utils/responsive';
 import { formatKoboAsNaira } from '@/lib/utils/money';
 import type { WithdrawalStatus } from '@/features/withdrawals/api/withdrawals-api';
+import { PressableSpring } from '@/components/motion';
+import { CheckMarkDraw } from '@/components/wallet';
+import { haptic } from '@/lib/motion/haptics';
 import { sheetStyles } from '../sheet-styles';
 
 type Variant = 'pending' | 'completed' | 'failed';
@@ -39,10 +42,13 @@ function toVariant(status: WithdrawalStatus): Variant {
   return 'pending';
 }
 
-const PALETTE: Record<Variant, { bg: string; fg: string; icon: 'check' | 'x' | 'clock' }> = {
-  pending: { bg: '#0E1620', fg: '#3B82F6', icon: 'check' },
-  completed: { bg: '#0F1F12', fg: '#5BD37A', icon: 'check' },
-  failed: { bg: '#1F0E0E', fg: '#FF5A5A', icon: 'x' },
+const PALETTE: Record<
+  Variant,
+  { bg: string; fg: string; variant: 'check' | 'x' }
+> = {
+  pending: { bg: '#0E1620', fg: '#3B82F6', variant: 'check' },
+  completed: { bg: '#0F1F12', fg: Colors.status.win, variant: 'check' },
+  failed: { bg: '#1F0E0E', fg: Colors.status.loss, variant: 'x' },
 };
 
 export function ResultPane({
@@ -57,6 +63,15 @@ export function ResultPane({
   const variant = toVariant(status);
   const palette = PALETTE[variant];
 
+  // Terminal haptic — fire once when the pane mounts with a terminal status.
+  useEffect(() => {
+    if (variant === 'completed') haptic.success();
+    else if (variant === 'failed') haptic.error();
+    else haptic.soft();
+    // run-once on mount
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const destination =
     bankName && last4
       ? `${bankName} •••• ${last4}`
@@ -64,8 +79,18 @@ export function ResultPane({
 
   return (
     <View style={styles.wrap}>
-      <View style={[styles.iconCircle, { backgroundColor: palette.bg }]}>
-        <Feather name={palette.icon} size={rs.font(30)} color={palette.fg} />
+      <View style={styles.badge}>
+        {variant === 'completed' ? (
+          <View
+            style={[styles.glow, { backgroundColor: Colors.status.win }]}
+          />
+        ) : null}
+        <CheckMarkDraw
+          variant={palette.variant}
+          color={palette.fg}
+          background={palette.bg}
+          size={rs.size(72)}
+        />
       </View>
 
       {variant === 'pending' && (
@@ -101,32 +126,32 @@ export function ResultPane({
         </>
       )}
 
-      <Pressable
+      <PressableSpring
         onPress={variant === 'failed' ? onRetry : onDismiss}
-        accessibilityRole="button"
+        variant="primary"
+        haptic="medium"
         accessibilityLabel={variant === 'failed' ? 'Try again' : 'Done'}
-        style={({ pressed }) => [
-          sheetStyles.submit,
-          { marginTop: rs.size(28), opacity: pressed ? 0.85 : 1 },
-        ]}
+        style={{ marginTop: rs.size(28), alignSelf: 'stretch' }}
       >
-        <Text style={sheetStyles.submitText}>
-          {variant === 'failed' ? 'Try again' : 'Done'}
-        </Text>
-      </Pressable>
+        <View style={sheetStyles.submit}>
+          <Text style={sheetStyles.submitText}>
+            {variant === 'failed' ? 'Try again' : 'Done'}
+          </Text>
+        </View>
+      </PressableSpring>
 
       {variant === 'failed' && (
-        <Pressable
+        <PressableSpring
           onPress={onDismiss}
-          accessibilityRole="button"
+          variant="ghost"
+          haptic="tap"
           accessibilityLabel="Done"
-          style={({ pressed }) => [
-            sheetStyles.ghostBtn,
-            pressed && { opacity: 0.85 },
-          ]}
+          style={{ alignSelf: 'stretch' }}
         >
-          <Text style={sheetStyles.ghostBtnText}>Done</Text>
-        </Pressable>
+          <View style={sheetStyles.ghostBtn}>
+            <Text style={sheetStyles.ghostBtnText}>Done</Text>
+          </View>
+        </PressableSpring>
       )}
     </View>
   );
@@ -134,12 +159,18 @@ export function ResultPane({
 
 const styles = StyleSheet.create({
   wrap: { paddingVertical: rs.size(16), alignItems: 'center' },
-  iconCircle: {
-    width: rs.size(72),
-    height: rs.size(72),
-    borderRadius: rs.size(36),
+  badge: {
+    width: rs.size(96),
+    height: rs.size(96),
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  glow: {
+    position: 'absolute',
+    width: rs.size(96),
+    height: rs.size(96),
+    borderRadius: rs.size(48),
+    opacity: 0.18,
   },
   title: {
     marginTop: rs.size(20),

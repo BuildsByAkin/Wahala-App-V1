@@ -4,11 +4,13 @@
 // their identity colors. For n-ary the bar splits proportionally and the
 // percentages live on the choice cards themselves.
 //
-// On a locked / resolved market the bar is rendered identically (the values
-// are already frozen server-side); the StatusPill above the screen
-// communicates that the numbers are final.
-import React from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+// On mount the segments ease from an equal split (100/n each) to the true
+// split so the user *sees* the market settle into place when entering the
+// detail page. On a locked / resolved market the values are already frozen
+// server-side; the StatusPill above the screen communicates that the numbers
+// are final.
+import React, { useEffect, useRef } from 'react';
+import { Animated, Easing, StyleSheet, Text, View } from 'react-native';
 
 import { Colors } from '@/constants/colors';
 import { Fonts } from '@/constants/fonts';
@@ -31,7 +33,6 @@ export function ProbabilityBar({
   colors,
   hideLabels = false,
 }: Props) {
-  const totalPct = outcomes.reduce((s, o) => s + Math.max(0, o.sharePercent), 0);
   const showLabels = !hideLabels && outcomes.length === 2;
 
   return (
@@ -58,23 +59,60 @@ export function ProbabilityBar({
       ) : null}
 
       <View style={styles.track}>
-        {!poolExists || totalPct <= 0
-          ? null
-          : outcomes.map((o, i) => {
-              const pct = Math.max(0, o.sharePercent);
-              if (pct <= 0) return null;
-              return (
-                <View
-                  key={o.id}
-                  style={{
-                    flex: pct,
-                    backgroundColor: colors[i] ?? Colors.text.tertiary,
-                  }}
-                />
-              );
-            })}
+        {poolExists
+          ? outcomes.map((o, i) => (
+              <AnimatedSegment
+                key={o.id}
+                targetPct={Math.max(0, o.sharePercent)}
+                neutralPct={100 / Math.max(1, outcomes.length)}
+                color={colors[i] ?? Colors.text.tertiary}
+                delayMs={280 + i * 60}
+              />
+            ))
+          : null}
       </View>
     </View>
+  );
+}
+
+// One animated segment. We animate flex (not width %) so the segments stay
+// perfectly summed to 100% at every frame and never produce a sub-pixel gap.
+function AnimatedSegment({
+  targetPct,
+  neutralPct,
+  color,
+  delayMs,
+}: {
+  targetPct: number;
+  neutralPct: number;
+  color: string;
+  delayMs: number;
+}) {
+  const flex = useRef(new Animated.Value(neutralPct)).current;
+
+  useEffect(() => {
+    flex.setValue(neutralPct);
+    const anim = Animated.timing(flex, {
+      toValue: Math.max(0.0001, targetPct),
+      duration: 900,
+      delay: delayMs,
+      easing: Easing.out(Easing.cubic),
+      // `flex` is a layout prop — must run on the JS driver.
+      useNativeDriver: false,
+    });
+    anim.start();
+    return () => {
+      anim.stop();
+    };
+  }, [flex, targetPct, neutralPct, delayMs]);
+
+  return (
+    <Animated.View
+      style={{
+        flex: flex as unknown as number,
+        backgroundColor: color,
+      }}
+    />
   );
 }
 

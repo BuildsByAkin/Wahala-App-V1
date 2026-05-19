@@ -2,6 +2,8 @@
 // All market-pool math lives here. Kobo values arrive as bigint strings from the
 // API — never parse them to JS Number, always use BigInt for arithmetic.
 
+import { getCategoryAccent } from '@/constants/colors';
+
 export type Outcome = {
   id: string;
   label: string;
@@ -28,6 +30,24 @@ export type MarketStatus =
   | 'cancelled'
   | 'voided';
 
+// Denormalized colour triplet for a category. Mirrors `GET /categories`
+// (BACKEND.md §1) so screens never have to import the static palette table.
+export type CategoryMeta = {
+  primaryColor: string;
+  softColor: string;
+  glowColor: string;
+};
+
+// Anonymous stakers are excluded from `recentStakers` per BACKEND.md §2 —
+// they still count toward `recentStakersCount`. Username is included so the
+// avatar stack can display initials without another lookup.
+export type RecentStaker = {
+  userId: string;
+  displayName: string | null;
+  username: string;
+  avatarColor: string;
+};
+
 export type Market = {
   id: string;
   slug: string;
@@ -42,6 +62,19 @@ export type Market = {
   outcomes: Outcome[];
   lastComment: LastComment;
   imageUrl: string | null;
+  // ── v2 alive fields (BACKEND.md §2). All optional so an older backend
+  //    payload still parses; consumers must defensively fall back. ────────
+  categoryMeta?: CategoryMeta;
+  volatilityScore?: number;            // 0..1
+  last24hPoolDeltaKobo?: string;
+  last24hPoolDeltaPct?: number;
+  last1hPoolDeltaKobo?: string;
+  last1hPoolDeltaPct?: number;
+  sparkline24h?: number[];             // 24 pool-ratio percent points
+  recentStakers?: RecentStaker[];
+  recentStakersCount?: number;
+  // BACKEND.md §9 — Drama Mode late-fee pot, displayed on the detail screen.
+  lateFeePoolKobo?: string | null;
 };
 
 const AVATAR_PALETTE = [
@@ -232,13 +265,24 @@ export const BINARY_COLOR_SCHEMES = [
 
 export type BinaryScheme = readonly [string, string];
 
-export function getCardSchemeColors(marketId: string): BinaryScheme {
+export function getCardSchemeColors(marketId: string, category?: string | null): BinaryScheme {
+  // Bundle 1: if a category is supplied, derive a deterministic pair where
+  // the LEADER takes the category's primary identity colour and the TRAILER
+  // takes a hash-picked neutral counterpart. This keeps a Politics market
+  // visually distinct from a Sports market without sacrificing per-market
+  // randomness on the trailer half.
   const cleaned = (marketId ?? '').replace(/[^a-z0-9]/gi, '');
-  if (cleaned.length === 0) return BINARY_COLOR_SCHEMES[0];
   let hash = 0;
   for (let i = 0; i < cleaned.length; i++) {
     hash = (hash * 31 + cleaned.charCodeAt(i)) >>> 0;
   }
+  if (category) {
+    const accent = getCategoryAccent(category).primary;
+    const trailerPool = ['#A78BFA', '#F472B6', '#06B6D4', '#FBBF24', '#7DD3FC', '#10E0A0'];
+    const trailer = trailerPool[hash % trailerPool.length];
+    return [accent, trailer === accent ? trailerPool[(hash + 1) % trailerPool.length] : trailer] as const;
+  }
+  if (cleaned.length === 0) return BINARY_COLOR_SCHEMES[0];
   return BINARY_COLOR_SCHEMES[hash % BINARY_COLOR_SCHEMES.length];
 }
 

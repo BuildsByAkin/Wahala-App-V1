@@ -29,6 +29,9 @@ export type PlaceBetResult = {
     availableKobo: string;
     lockedKobo: string;
   };
+  // BACKEND.md §9 — Drama Mode late fee. Non-null when the stake landed
+  // inside the LATE_FEE_WINDOW_SECONDS window (default 1h before close).
+  lateFeeKobo?: string | null;
 };
 
 export type BetStatus = 'active' | 'won' | 'lost';
@@ -47,6 +50,13 @@ export type MyBet = {
   multiplier: number | null;
   displayMode: DisplayMode;
   createdAt: string;
+  // BACKEND.md §13 — denormalized camp colour for per-camp wallet rendering.
+  // Optional; older backends omit it.
+  camp?: {
+    outcomeId: string;
+    outcomeLabel: string;
+    color: string;
+  };
 };
 
 type ListMyBetsParams = {
@@ -82,11 +92,41 @@ export const bettingApi = {
     return {
       activeStakeKobo: data?.activeStakeKobo ?? '0',
       activeCount: data?.activeCount ?? 0,
+      // BACKEND.md §14 — optional W—L + sparkline. Defensive defaults so the
+      // RecordHero can still render on an older backend (consumers fall back
+      // to client-side computation in that case).
+      winsCount: data?.winsCount,
+      lossesCount: data?.lossesCount,
+      winRate: data?.winRate,
+      netProfitKoboAllTime: data?.netProfitKoboAllTime,
+      netProfitSparkline: data?.netProfitSparkline,
     };
+  },
+
+  // BACKEND.md §7 — defect to another camp. Server charges DEFECTION_FEE_BPS
+  // (default 2%) and emits stance.changed on the market stream.
+  switchOutcome: async (params: {
+    betId: string;
+    targetOutcomeId: string;
+  }): Promise<{
+    bet: MyBet;
+    wallet: { availableKobo: string; lockedKobo: string };
+    feeKobo: string;
+  }> => {
+    const { data } = await api.post(`/me/bets/${params.betId}/switch`, {
+      targetOutcomeId: params.targetOutcomeId,
+    });
+    return data;
   },
 };
 
 export type MyBetsSummary = {
   activeStakeKobo: string;
   activeCount: number;
+  // Optional v2 fields — BACKEND.md §14.
+  winsCount?: number;
+  lossesCount?: number;
+  winRate?: number;            // 0..1
+  netProfitKoboAllTime?: string;
+  netProfitSparkline?: number[]; // 30 daily P&L deltas in kobo
 };

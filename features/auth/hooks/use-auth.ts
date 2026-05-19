@@ -23,6 +23,7 @@ import {
 } from '@/features/auth/store/auth-slice';
 import { extractApiError } from '@/lib/api/axios';
 import { leaderboardKeys } from '@/lib/api/query-keys';
+import { reconcileWithServer as reconcileStreak, resetStreak } from '@/lib/streak';
 import { normalizeNigerianPhone } from '@/lib/utils/phone';
 import { useAppDispatch, useAppSelector } from '@/store';
 
@@ -56,6 +57,12 @@ export function useMe(options?: { enabled?: boolean }) {
       const me = await authApi.getMe();
       // Mirror into Redux on every successful fetch.
       dispatch(applyMe(me));
+      // BACKEND.md §11.3 — keep the local streak in lockstep with the
+      // server-authoritative value. No-op when the field is absent.
+      void reconcileStreak({
+        dailyStreak: me.dailyStreak,
+        dailyStreakLastDay: me.dailyStreakLastDay,
+      });
       return me;
     },
     enabled: (options?.enabled ?? true) && isAuthenticated,
@@ -107,6 +114,10 @@ export function useAuth() {
       );
       const me = await authApi.getMe();
       dispatch(applyMe(me));
+      void reconcileStreak({
+        dailyStreak: me.dailyStreak,
+        dailyStreakLastDay: me.dailyStreakLastDay,
+      });
       // Seed the cache so the next mount of `useMe` doesn't refetch.
       queryClient.setQueryData(authKeys.me(), me);
       return { login: res, me };
@@ -207,6 +218,9 @@ export function useAuth() {
   const signOut = useCallback(() => {
     dispatch(logout());
     queryClient.removeQueries({ queryKey: authKeys.me() });
+    // Bundle 6 — wipe the local daily-streak so the next user on this
+    // device starts at zero.
+    void resetStreak();
   }, [dispatch, queryClient]);
 
   // Loading + error surfaces are derived from whichever mutation is in flight.

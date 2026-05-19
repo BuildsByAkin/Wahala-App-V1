@@ -22,9 +22,7 @@
 //     /deposits/initiate fresh.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Animated,
   BackHandler,
-  Easing,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -39,9 +37,26 @@ import * as WebBrowser from 'expo-web-browser';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useQueryClient } from '@tanstack/react-query';
+import RNAnimated, {
+  Easing as REasing,
+  FadeIn,
+  FadeOut,
+  useAnimatedStyle,
+  useSharedValue,
+  withRepeat,
+  withSequence,
+  withTiming,
+} from 'react-native-reanimated';
+
+import { useReducedMotion } from '@/hooks/useReducedMotion';
 
 import { Fonts } from '@/constants/fonts';
+import { Colors } from '@/constants/colors';
 import { rs } from '@/utils/responsive';
+import { PressableSpring, RollingNumber } from '@/components/motion';
+import { CheckMarkDraw, QuickAmountChip } from '@/components/wallet';
+import { haptic } from '@/lib/motion/haptics';
+import { useToast } from '@/hooks/useToast';
 import { authKeys, useAuth } from '@/features/auth';
 import { formatKoboAsNaira } from '@/lib/utils/money';
 import { useAppDispatch, useAppSelector } from '@/store';
@@ -66,7 +81,7 @@ import {
 } from '@/features/deposits';
 
 const ACCENT = '#FF6500';
-const QUICK_NAIRA = [500, 1_000, 2_000, 5_000, 10_000];
+const QUICK_NAIRA = [1_000, 2_000, 5_000, 10_000];
 const RETURN_URL = 'wahala://deposit/success';
 
 type Pane = 'entry' | 'processing' | 'success' | 'failed' | 'cancelled';
@@ -79,6 +94,7 @@ export default function DepositScreen() {
 
   const depositState = useAppSelector((s) => s.deposit);
   const initMutation = useInitiateDeposit();
+  const toast = useToast();
 
   // On mount we only resume a deposit if it's genuinely mid-flight (loading
   // or processing with a sessionId). Terminal states from a previous attempt
@@ -152,24 +168,27 @@ export default function DepositScreen() {
   const handleTerminal = useCallback(
     (data: DepositStatusResponse) => {
       if (data.status === 'completed') {
-        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        haptic.success();
+        toast.show({
+          kind: 'success',
+          title: 'Deposit complete',
+          body: 'Your wallet has been credited.',
+        });
         dispatch(depositCompleted());
         setPane('success');
       } else {
         // 'expired' and 'failed' both land on the failed pane.
-        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-        dispatch(
-          depositFailed({
-            message:
-              data.status === 'expired'
-                ? 'This payment session expired before it could be completed.'
-                : 'Your payment could not be completed.',
-          })
-        );
+        haptic.error();
+        const message =
+          data.status === 'expired'
+            ? 'This payment session expired before it could be completed.'
+            : 'Your payment could not be completed.';
+        toast.show({ kind: 'error', title: 'Deposit failed', body: message });
+        dispatch(depositFailed({ message }));
         setPane('failed');
       }
     },
-    [dispatch]
+    [dispatch, toast]
   );
 
   const handleTimeout = useCallback(() => {
@@ -341,66 +360,101 @@ export default function DepositScreen() {
       >
         <View style={styles.content}>
           {pane === 'entry' && (
-            <EntryPane
-              stakeNairaText={stakeNairaText}
-              setStakeNairaText={(t) => {
-                setStakeNairaText(t);
-                setLocalError(null);
-              }}
-              walletAvailableKobo={walletAvailableKobo}
-              onQuickPick={onQuickPick}
-              error={inlineError || null}
-              isPending={initMutation.isPending || submittingRef.current}
-              canContinue={validation.ok}
-              onContinue={onContinue}
-            />
+            <RNAnimated.View
+              key="entry"
+              style={styles.flex}
+              entering={FadeIn.duration(220)}
+              exiting={FadeOut.duration(180)}
+            >
+              <EntryPane
+                stakeNairaText={stakeNairaText}
+                setStakeNairaText={(t) => {
+                  setStakeNairaText(t);
+                  setLocalError(null);
+                }}
+                walletAvailableKobo={walletAvailableKobo}
+                onQuickPick={onQuickPick}
+                error={inlineError || null}
+                isPending={initMutation.isPending || submittingRef.current}
+                canContinue={validation.ok}
+                onContinue={onContinue}
+              />
+            </RNAnimated.View>
           )}
 
           {pane === 'processing' && (
-            <ProcessingPane
-              amountKobo={depositState.amountKobo ?? '0'}
-              attempts={polling.attempts}
-              maxAttempts={polling.maxAttempts}
-              timedOut={polling.timedOut}
-              statusError={polling.isError ? 'Reconnecting…' : null}
-              onCancel={onCancelProcessing}
-            />
+            <RNAnimated.View
+              key="processing"
+              style={styles.flex}
+              entering={FadeIn.duration(220)}
+              exiting={FadeOut.duration(180)}
+            >
+              <ProcessingPane
+                amountKobo={depositState.amountKobo ?? '0'}
+                attempts={polling.attempts}
+                maxAttempts={polling.maxAttempts}
+                timedOut={polling.timedOut}
+                statusError={polling.isError ? 'Reconnecting…' : null}
+                onCancel={onCancelProcessing}
+              />
+            </RNAnimated.View>
           )}
 
           {pane === 'success' && (
-            <ResultPane
-              status="completed"
-              amountKobo={depositState.amountKobo ?? '0'}
-              message={null}
-              primaryLabel="Done"
-              onPrimary={goDone}
-              secondaryLabel={null}
-              onSecondary={null}
-            />
+            <RNAnimated.View
+              key="success"
+              style={styles.flex}
+              entering={FadeIn.duration(260)}
+              exiting={FadeOut.duration(180)}
+            >
+              <ResultPane
+                status="completed"
+                amountKobo={depositState.amountKobo ?? '0'}
+                message={null}
+                primaryLabel="Done"
+                onPrimary={goDone}
+                secondaryLabel={null}
+                onSecondary={null}
+              />
+            </RNAnimated.View>
           )}
 
           {pane === 'failed' && (
-            <ResultPane
-              status="failed"
-              amountKobo={depositState.amountKobo ?? '0'}
-              message={depositState.errorMessage}
-              primaryLabel="Try again"
-              onPrimary={startOver}
-              secondaryLabel="Close"
-              onSecondary={goDone}
-            />
+            <RNAnimated.View
+              key="failed"
+              style={styles.flex}
+              entering={FadeIn.duration(260)}
+              exiting={FadeOut.duration(180)}
+            >
+              <ResultPane
+                status="failed"
+                amountKobo={depositState.amountKobo ?? '0'}
+                message={depositState.errorMessage}
+                primaryLabel="Try again"
+                onPrimary={startOver}
+                secondaryLabel="Close"
+                onSecondary={goDone}
+              />
+            </RNAnimated.View>
           )}
 
           {pane === 'cancelled' && (
-            <ResultPane
-              status="cancelled"
-              amountKobo={depositState.amountKobo ?? '0'}
-              message="You closed the payment before it was completed."
-              primaryLabel="Try again"
-              onPrimary={startOver}
-              secondaryLabel="Close"
-              onSecondary={goDone}
-            />
+            <RNAnimated.View
+              key="cancelled"
+              style={styles.flex}
+              entering={FadeIn.duration(260)}
+              exiting={FadeOut.duration(180)}
+            >
+              <ResultPane
+                status="cancelled"
+                amountKobo={depositState.amountKobo ?? '0'}
+                message="You closed the payment before it was completed."
+                primaryLabel="Try again"
+                onPrimary={startOver}
+                secondaryLabel="Close"
+                onSecondary={goDone}
+              />
+            </RNAnimated.View>
           )}
         </View>
       </KeyboardAvoidingView>
@@ -459,20 +513,18 @@ function EntryPane({
       </View>
 
       <View style={styles.chipsRow}>
-        {QUICK_NAIRA.map((n) => (
-          <Pressable
-            key={n}
-            onPress={() => onQuickPick(n)}
-            accessibilityRole="button"
-            accessibilityLabel={`Quick deposit ${n} naira`}
-            style={({ pressed }) => [
-              styles.chip,
-              pressed && styles.chipPressed,
-            ]}
-          >
-            <Text style={styles.chipText}>₦{n.toLocaleString()}</Text>
-          </Pressable>
-        ))}
+        {QUICK_NAIRA.map((n) => {
+          const selected = stakeNairaText === String(n);
+          return (
+            <QuickAmountChip
+              key={n}
+              amount={n}
+              selected={selected}
+              hasSelection={QUICK_NAIRA.some((q) => stakeNairaText === String(q))}
+              onPress={() => onQuickPick(n)}
+            />
+          );
+        })}
       </View>
 
       {error ? (
@@ -484,24 +536,21 @@ function EntryPane({
 
       <View style={styles.flex} />
 
-      <Pressable
+      <PressableSpring
         onPress={onContinue}
         disabled={!canContinue || isPending}
-        accessibilityRole="button"
+        variant="primary"
+        haptic="medium"
         accessibilityLabel="Continue to Stripe"
         accessibilityHint="Opens the Stripe checkout in a secure browser"
-        style={({ pressed }) => [
-          styles.submit,
-          {
-            opacity:
-              !canContinue || isPending ? 0.4 : pressed ? 0.85 : 1,
-          },
-        ]}
+        style={{ opacity: !canContinue || isPending ? 0.4 : 1 }}
       >
-        <Text style={styles.submitText}>
-          {isPending ? 'Preparing…' : 'Continue to Stripe'}
-        </Text>
-      </Pressable>
+        <View style={styles.submit}>
+          <Text style={styles.submitText}>
+            {isPending ? 'Preparing…' : 'Continue to Stripe'}
+          </Text>
+        </View>
+      </PressableSpring>
 
       <Text style={styles.legal}>
         Secure payment powered by Stripe · Bank transfer or card
@@ -527,38 +576,35 @@ function ProcessingPane({
   statusError,
   onCancel,
 }: ProcessingPaneProps) {
-  const pulse = useRef(new Animated.Value(1)).current;
+  const reduced = useReducedMotion();
+  const pulse = useSharedValue(1);
   useEffect(() => {
-    const loop = Animated.loop(
-      Animated.sequence([
-        Animated.timing(pulse, {
-          toValue: 0.55,
-          duration: 700,
-          easing: Easing.inOut(Easing.ease),
-          useNativeDriver: true,
-        }),
-        Animated.timing(pulse, {
-          toValue: 1,
-          duration: 700,
-          easing: Easing.inOut(Easing.ease),
-          useNativeDriver: true,
-        }),
-      ])
+    if (reduced) {
+      pulse.value = 1;
+      return;
+    }
+    pulse.value = withRepeat(
+      withSequence(
+        withTiming(0.55, { duration: 700, easing: REasing.inOut(REasing.ease) }),
+        withTiming(1, { duration: 700, easing: REasing.inOut(REasing.ease) })
+      ),
+      -1,
+      false
     );
-    loop.start();
-    return () => loop.stop();
-  }, [pulse]);
+  }, [pulse, reduced]);
+  const pulseStyle = useAnimatedStyle(() => ({ opacity: pulse.value }));
 
   return (
     <View style={[styles.paneRoot, styles.centerPane]}>
-      <Animated.View
+      <RNAnimated.View
         style={[
           styles.iconCircle,
-          { backgroundColor: '#1A1208', opacity: pulse },
+          { backgroundColor: '#1A1208' },
+          pulseStyle,
         ]}
       >
         <Feather name="clock" size={rs.font(28)} color={ACCENT} />
-      </Animated.View>
+      </RNAnimated.View>
       <Text style={styles.resultTitle}>
         {timedOut ? 'Still processing' : 'Waiting for payment'}
       </Text>
@@ -625,59 +671,103 @@ function ResultPane({
   secondaryLabel,
   onSecondary,
 }: ResultPaneProps) {
-  const palette =
-    status === 'completed'
-      ? { bg: '#0F1F12', fg: '#5BD37A', icon: 'check' as const }
-      : status === 'failed'
-        ? { bg: '#1F0E0E', fg: '#FF5A5A', icon: 'x' as const }
-        : { bg: '#1A1A1A', fg: '#AAAAAA', icon: 'slash' as const };
+  const isSuccess = status === 'completed';
+  const isFail = status === 'failed';
 
-  const title =
-    status === 'completed'
-      ? 'Wallet topped up'
-      : status === 'failed'
-        ? 'Payment failed'
-        : 'Payment cancelled';
+  const palette = isSuccess
+    ? { bg: '#0F1F12', fg: Colors.status.win, variant: 'check' as const }
+    : isFail
+      ? { bg: '#1F0E0E', fg: Colors.status.loss, variant: 'x' as const }
+      : { bg: '#1A1A1A', fg: Colors.text.secondary, variant: 'x' as const };
 
-  const subtitle =
-    status === 'completed'
-      ? `₦${formatKoboAsNaira(amountKobo)} is now in your wallet.`
-      : (message ?? 'You can try again whenever you\u2019re ready.');
+  const title = isSuccess
+    ? 'Wallet topped up'
+    : isFail
+      ? 'Payment failed'
+      : 'Payment cancelled';
+
+  // Convert amountKobo to a naira number for the odometer. Kobo precision is
+  // preserved server-side; the human reads the naira integer.
+  const nairaValue = (() => {
+    try {
+      return Number(BigInt(amountKobo) / 100n);
+    } catch {
+      return 0;
+    }
+  })();
+  const safeForRolling = Number.isSafeInteger(nairaValue);
 
   return (
     <View style={[styles.paneRoot, styles.centerPane]}>
-      <View style={[styles.iconCircle, { backgroundColor: palette.bg }]}>
-        <Feather name={palette.icon} size={rs.font(30)} color={palette.fg} />
+      <View style={styles.successBadge}>
+        {isSuccess ? (
+          <View
+            style={[
+              styles.successGlow,
+              { backgroundColor: Colors.status.win },
+            ]}
+          />
+        ) : null}
+        <CheckMarkDraw
+          variant={palette.variant}
+          color={palette.fg}
+          background={palette.bg}
+          size={rs.size(72)}
+        />
       </View>
+
       <Text style={styles.resultTitle}>{title}</Text>
-      <Text style={styles.resultSubtitle}>{subtitle}</Text>
+
+      {isSuccess ? (
+        <View style={styles.successAmountRow}>
+          <Text style={[styles.naira, styles.successNaira]}>+₦</Text>
+          {safeForRolling ? (
+            <RollingNumber
+              value={nairaValue}
+              format={(n) => n.toLocaleString('en-US')}
+              digitHeight={rs.font(34) * 1.1}
+              textStyle={styles.successAmount}
+            />
+          ) : (
+            <Text style={styles.successAmount}>
+              {formatKoboAsNaira(amountKobo)}
+            </Text>
+          )}
+        </View>
+      ) : null}
+
+      <Text style={styles.resultSubtitle}>
+        {isSuccess
+          ? 'Money don land. Time to find market.'
+          : (message ?? 'You can try again whenever you\u2019re ready.')}
+      </Text>
 
       <View style={styles.flex} />
 
-      <Pressable
+      <PressableSpring
         onPress={onPrimary}
-        accessibilityRole="button"
+        variant="primary"
+        haptic="medium"
         accessibilityLabel={primaryLabel}
-        style={({ pressed }) => [
-          styles.submit,
-          { opacity: pressed ? 0.85 : 1 },
-        ]}
+        style={styles.resultButtonStretch}
       >
-        <Text style={styles.submitText}>{primaryLabel}</Text>
-      </Pressable>
+        <View style={styles.submit}>
+          <Text style={styles.submitText}>{primaryLabel}</Text>
+        </View>
+      </PressableSpring>
 
       {secondaryLabel && onSecondary ? (
-        <Pressable
+        <PressableSpring
           onPress={onSecondary}
-          accessibilityRole="button"
+          variant="ghost"
+          haptic="tap"
           accessibilityLabel={secondaryLabel}
-          style={({ pressed }) => [
-            styles.ghostBtn,
-            pressed && { opacity: 0.85 },
-          ]}
+          style={styles.resultButtonStretch}
         >
-          <Text style={styles.ghostBtnText}>{secondaryLabel}</Text>
-        </Pressable>
+          <View style={styles.ghostBtn}>
+            <Text style={styles.ghostBtnText}>{secondaryLabel}</Text>
+          </View>
+        </PressableSpring>
       ) : null}
     </View>
   );
@@ -841,6 +931,9 @@ const styles = StyleSheet.create({
     fontSize: rs.font(12),
     color: '#FF8A8A',
   },
+  resultButtonStretch: {
+    alignSelf: 'stretch',
+  },
   submit: {
     backgroundColor: ACCENT,
     paddingVertical: rs.size(16),
@@ -886,6 +979,38 @@ const styles = StyleSheet.create({
     borderRadius: rs.size(36),
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  successBadge: {
+    width: rs.size(96),
+    height: rs.size(96),
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  successGlow: {
+    position: 'absolute',
+    width: rs.size(96),
+    height: rs.size(96),
+    borderRadius: rs.size(48),
+    opacity: 0.18,
+  },
+  successAmountRow: {
+    marginTop: rs.size(16),
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+  },
+  successNaira: {
+    color: Colors.status.win,
+    marginRight: rs.size(2),
+    fontSize: rs.font(28),
+    lineHeight: rs.font(34) * 1.1,
+    includeFontPadding: false,
+  },
+  successAmount: {
+    fontFamily: Fonts.bold,
+    fontSize: rs.font(34),
+    color: Colors.status.win,
+    letterSpacing: -0.5,
+    includeFontPadding: false,
   },
   resultTitle: {
     marginTop: rs.size(20),

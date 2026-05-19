@@ -1,29 +1,30 @@
 // features/betting/components/locked-notice-sheet.tsx
-import React, { useEffect, useRef } from 'react';
-import {
-  Animated,
-  Easing,
-  Modal,
-  Pressable,
-  StyleSheet,
-  Text,
-  View,
-} from 'react-native';
+// Refactored onto the system `SheetBase` primitive (Bundle 2).
+import React from 'react';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Feather } from '@expo/vector-icons';
-import * as Haptics from 'expo-haptics';
 
+import { Colors } from '@/constants/colors';
 import { Fonts } from '@/constants/fonts';
 import { rs } from '@/utils/responsive';
 import { formatKoboAsNaira } from '@/lib/utils/money';
+import { SheetBase } from '@/components/motion/SheetBase';
+import { PressableSpring } from '@/components/motion/PressableSpring';
 
 type Props = {
   visible: boolean;
-  // Outcome the user is already locked into.
   lockedOutcomeLabel: string | null;
   lockedOutcomeColor: string;
   lockedStakeKobo: string | null;
-  // The outcome the user just tried to tap (for the gentle "you tapped X" line).
   attemptedOutcomeLabel: string | null;
+  // BACKEND.md §7 — Switch-camp affordance. When `canSwitch` and a target
+  // colour are supplied we render a secondary "Switch to {attemptedLabel}"
+  // CTA that defects every active stake on the locked outcome.
+  canSwitch?: boolean;
+  attemptedOutcomeColor?: string;
+  isSwitching?: boolean;
+  switchFeeLabel?: string | null;
+  onSwitchToAttempted?: () => void;
   onAddToLocked: () => void;
   onClose: () => void;
 };
@@ -34,167 +35,85 @@ export function LockedNoticeSheet({
   lockedOutcomeColor,
   lockedStakeKobo,
   attemptedOutcomeLabel,
+  canSwitch = false,
+  attemptedOutcomeColor,
+  isSwitching = false,
+  switchFeeLabel = null,
+  onSwitchToAttempted,
   onAddToLocked,
   onClose,
 }: Props) {
-  const translateY = useRef(new Animated.Value(360)).current;
-  const backdropOpacity = useRef(new Animated.Value(0)).current;
-
-  useEffect(() => {
-    if (visible) {
-      Haptics.selectionAsync();
-      Animated.parallel([
-        Animated.timing(backdropOpacity, {
-          toValue: 1,
-          duration: 200,
-          easing: Easing.out(Easing.ease),
-          useNativeDriver: true,
-        }),
-        Animated.spring(translateY, {
-          toValue: 0,
-          useNativeDriver: true,
-          damping: 22,
-          stiffness: 220,
-          mass: 0.9,
-        }),
-      ]).start();
-    } else {
-      translateY.setValue(360);
-      backdropOpacity.setValue(0);
-    }
-  }, [visible, translateY, backdropOpacity]);
-
   if (!lockedOutcomeLabel) return null;
 
-  const stakeText = lockedStakeKobo
-    ? `₦${formatKoboAsNaira(lockedStakeKobo)}`
-    : null;
+  const stakeText = lockedStakeKobo ? `₦${formatKoboAsNaira(lockedStakeKobo)}` : null;
 
   return (
-    <Modal
-      visible={visible}
-      transparent
-      animationType="none"
-      onRequestClose={onClose}
-      statusBarTranslucent
-    >
-      <View style={styles.root}>
-        <Animated.View style={[styles.backdrop, { opacity: backdropOpacity }]}>
-          <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
-        </Animated.View>
-
-        <Animated.View
-          style={[styles.sheet, { transform: [{ translateY }] }]}
+    <SheetBase visible={visible} onClose={onClose}>
+      <View style={styles.inner}>
+        <View
+          style={[
+            styles.iconWrap,
+            { backgroundColor: `${lockedOutcomeColor}1F` },
+          ]}
         >
-          <View style={styles.handle} />
+          <Feather name="lock" size={rs.font(22)} color={lockedOutcomeColor} />
+        </View>
 
-          <View
-            style={[
-              styles.iconWrap,
-              { backgroundColor: `${lockedOutcomeColor}1F` },
-            ]}
-          >
-            <Feather
-              name="lock"
-              size={rs.font(22)}
-              color={lockedOutcomeColor}
-            />
-          </View>
+        <Text style={styles.title}>You&apos;re already in</Text>
 
-          <Text style={styles.title}>You&apos;re already in</Text>
-
-          <Text style={styles.body}>
-            You staked{' '}
-            {stakeText ? (
-              <Text style={styles.bodyStrong}>{stakeText}</Text>
-            ) : null}{' '}
-            on{' '}
-            <Text style={[styles.bodyStrong, { color: lockedOutcomeColor }]}>
-              {lockedOutcomeLabel}
-            </Text>
-            . You can only add to that bet — one side per market.
+        <Text style={styles.body}>
+          You staked{' '}
+          {stakeText ? <Text style={styles.bodyStrong}>{stakeText}</Text> : null}{' '}
+          on{' '}
+          <Text style={[styles.bodyStrong, { color: lockedOutcomeColor }]}>
+            {lockedOutcomeLabel}
           </Text>
+          . You can only add to that bet — one side per market.
+        </Text>
 
-          {attemptedOutcomeLabel &&
-          attemptedOutcomeLabel !== lockedOutcomeLabel ? (
-            <View style={styles.attemptRow}>
-              <Feather
-                name="info"
-                size={rs.font(12)}
-                color="#888888"
-              />
-              <Text style={styles.attemptText} numberOfLines={2}>
-                Tapped{' '}
-                <Text style={styles.attemptStrong}>
-                  {attemptedOutcomeLabel}
-                </Text>
-              </Text>
-            </View>
-          ) : null}
-
-          <Pressable
-            onPress={() => {
-              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-              onAddToLocked();
-            }}
-            accessibilityRole="button"
-            accessibilityLabel={`Add to your stake on ${lockedOutcomeLabel}`}
-            style={({ pressed }) => [
-              styles.primaryBtn,
-              {
-                backgroundColor: lockedOutcomeColor,
-                opacity: pressed ? 0.85 : 1,
-              },
-            ]}
-          >
-            <Feather
-              name="plus"
-              size={rs.font(16)}
-              color="#0A0A0A"
-            />
-            <Text style={styles.primaryBtnText}>
-              Add to {lockedOutcomeLabel}
+        {attemptedOutcomeLabel && attemptedOutcomeLabel !== lockedOutcomeLabel ? (
+          <View style={styles.attemptRow}>
+            <Feather name="info" size={rs.font(12)} color={Colors.text.secondary} />
+            <Text style={styles.attemptText} numberOfLines={2}>
+              Tapped{' '}
+              <Text style={styles.attemptStrong}>{attemptedOutcomeLabel}</Text>
             </Text>
-          </Pressable>
+          </View>
+        ) : null}
 
-          <Pressable
-            onPress={onClose}
-            accessibilityRole="button"
-            accessibilityLabel="Dismiss"
-            style={({ pressed }) => [
-              styles.secondaryBtn,
-              pressed && { opacity: 0.7 },
-            ]}
-          >
-            <Text style={styles.secondaryBtnText}>Got it</Text>
-          </Pressable>
-        </Animated.View>
+        <PressableSpring
+          variant="primary"
+          haptic="soft"
+          onPress={onAddToLocked}
+          accessibilityLabel={`Add to your stake on ${lockedOutcomeLabel}`}
+          style={[styles.primaryBtn, { backgroundColor: lockedOutcomeColor }]}
+        >
+          <Feather name="plus" size={rs.font(16)} color={Colors.text.onAction} />
+          <Text style={styles.primaryBtnText}>Add to {lockedOutcomeLabel}</Text>
+        </PressableSpring>
+
+        {/* Switch-camp / defection CTA intentionally removed — product
+            decision: one side per market, no hedging and no switching. The
+            `canSwitch` / `onSwitchToAttempted` props are kept on the API
+            for now to avoid breaking callers, but they no longer render. */}
+
+        <Pressable
+          onPress={onClose}
+          accessibilityRole="button"
+          accessibilityLabel="Dismiss"
+          style={({ pressed }) => [styles.secondaryBtn, pressed && { opacity: 0.7 }]}
+        >
+          <Text style={styles.secondaryBtnText}>Got it</Text>
+        </Pressable>
       </View>
-    </Modal>
+    </SheetBase>
   );
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, justifyContent: 'flex-end' },
-  backdrop: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0,0,0,0.65)',
-  },
-  sheet: {
-    backgroundColor: '#111111',
-    borderTopLeftRadius: rs.size(28),
-    borderTopRightRadius: rs.size(28),
-    paddingHorizontal: rs.size(24),
-    paddingTop: rs.size(10),
-    paddingBottom: rs.size(32),
+  inner: {
     alignItems: 'center',
-  },
-  handle: {
-    width: rs.size(40),
-    height: rs.size(5),
-    borderRadius: rs.size(3),
-    backgroundColor: '#2A2A2A',
-    marginBottom: rs.size(20),
+    paddingBottom: rs.size(16),
   },
   iconWrap: {
     width: rs.size(56),
@@ -208,7 +127,7 @@ const styles = StyleSheet.create({
     marginTop: rs.size(16),
     fontFamily: Fonts.bold,
     fontSize: rs.font(20),
-    color: '#FFFFFF',
+    color: Colors.text.primary,
     textAlign: 'center',
   },
   body: {
@@ -216,20 +135,20 @@ const styles = StyleSheet.create({
     fontFamily: Fonts.regular,
     fontSize: rs.font(14),
     lineHeight: rs.font(20),
-    color: '#999999',
+    color: Colors.text.secondary,
     textAlign: 'center',
     paddingHorizontal: rs.size(8),
   },
   bodyStrong: {
     fontFamily: Fonts.semibold,
-    color: '#FFFFFF',
+    color: Colors.text.primary,
   },
   attemptRow: {
     marginTop: rs.size(14),
     flexDirection: 'row',
     alignItems: 'center',
     gap: rs.size(6),
-    backgroundColor: '#181818',
+    backgroundColor: Colors.surface['02'],
     borderRadius: rs.size(999),
     paddingHorizontal: rs.size(12),
     paddingVertical: rs.size(6),
@@ -238,12 +157,12 @@ const styles = StyleSheet.create({
   attemptText: {
     fontFamily: Fonts.regular,
     fontSize: rs.font(12),
-    color: '#888888',
+    color: Colors.text.secondary,
     flexShrink: 1,
   },
   attemptStrong: {
     fontFamily: Fonts.semibold,
-    color: '#BBBBBB',
+    color: Colors.text.primary,
   },
   primaryBtn: {
     marginTop: rs.size(24),
@@ -258,8 +177,31 @@ const styles = StyleSheet.create({
   primaryBtnText: {
     fontFamily: Fonts.bold,
     fontSize: rs.font(15),
-    color: '#0A0A0A',
+    color: Colors.text.onAction,
     letterSpacing: 0.3,
+  },
+  switchBtn: {
+    marginTop: rs.size(10),
+    height: rs.size(48),
+    borderRadius: rs.size(24),
+    alignSelf: 'stretch',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: rs.size(6),
+    borderWidth: 1,
+    backgroundColor: 'transparent',
+  },
+  switchBtnText: {
+    fontFamily: Fonts.bold,
+    fontSize: rs.font(14),
+    letterSpacing: 0.2,
+  },
+  switchBtnFee: {
+    fontFamily: Fonts.regular,
+    fontSize: rs.font(11),
+    color: Colors.text.tertiary,
+    marginLeft: rs.size(4),
   },
   secondaryBtn: {
     marginTop: rs.size(8),
@@ -271,6 +213,6 @@ const styles = StyleSheet.create({
   secondaryBtnText: {
     fontFamily: Fonts.semibold,
     fontSize: rs.font(13),
-    color: '#666666',
+    color: Colors.text.tertiary,
   },
 });

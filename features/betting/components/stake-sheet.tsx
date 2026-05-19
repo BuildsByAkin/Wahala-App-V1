@@ -1,11 +1,5 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
-  Animated,
-  Dimensions,
-  Easing,
-  KeyboardAvoidingView,
-  Modal,
-  Platform,
   Pressable,
   StyleSheet,
   Text,
@@ -20,6 +14,7 @@ import { Fonts } from '@/constants/fonts';
 import { rs } from '@/utils/responsive';
 import { formatKoboAsNaira } from '@/lib/utils/money';
 import { useAppSelector } from '@/store';
+import { SheetBase } from '@/components/motion/SheetBase';
 
 import type { DetailOutcome, MarketDetail } from '@/hooks/useMarket';
 import {
@@ -41,7 +36,6 @@ type Props = {
 };
 
 const QUICK_NAIRA = [100, 500, 1000, 5000];
-const SCREEN_H = Dimensions.get('window').height;
 
 function withAlpha(hex: string, alphaHex: string) {
   return `${hex}${alphaHex}`;
@@ -64,41 +58,15 @@ export function StakeSheet({
 
   const [stakeNairaText, setStakeNairaText] = useState('');
   const [displayMode, setDisplayMode] = useState<DisplayMode>('username');
-  const [mounted, setMounted] = useState(false);
-
-  const progress = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
     if (visible) {
-      setMounted(true);
       setStakeNairaText('');
       setDisplayMode('username');
       reset();
-      progress.setValue(0);
-      Animated.spring(progress, {
-        toValue: 1,
-        damping: 24,
-        stiffness: 220,
-        mass: 0.9,
-        useNativeDriver: true,
-      }).start();
-    } else if (mounted) {
-      Animated.timing(progress, {
-        toValue: 0,
-        duration: 220,
-        easing: Easing.in(Easing.cubic),
-        useNativeDriver: true,
-      }).start(({ finished }) => {
-        if (finished) setMounted(false);
-      });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible, outcome?.id]);
-
-  const originFromBottom = useMemo(() => {
-    if (originY == null) return rs.size(120);
-    return Math.max(rs.size(40), SCREEN_H - originY);
-  }, [originY]);
 
   const minKobo = useMemo(() => safeBigInt(market?.minStakeKobo), [market]);
   const maxKobo = useMemo(() => safeBigInt(market?.maxStakeKobo), [market]);
@@ -166,61 +134,22 @@ export function StakeSheet({
     }
   };
 
-  const backdropOpacity = progress.interpolate({
-    inputRange: [0, 1],
-    outputRange: [0, 0.7],
-  });
-  const sheetTranslate = progress.interpolate({
-    inputRange: [0, 1],
-    outputRange: [originFromBottom, 0],
-  });
-  const sheetScale = progress.interpolate({
-    inputRange: [0, 1],
-    outputRange: [0.94, 1],
-  });
-  const sheetOpacity = progress.interpolate({
-    inputRange: [0, 0.4, 1],
-    outputRange: [0, 0.7, 1],
-  });
-
-  if (!mounted && !visible) return null;
-
   return (
-    <Modal
-      visible={mounted}
-      transparent
-      animationType="none"
-      onRequestClose={onClose}
-      statusBarTranslucent
+    <SheetBase
+      visible={visible}
+      onClose={onClose}
+      originY={originY}
+      contentStyle={[styles.sheetInner, { borderColor: withAlpha(color, '33') }]}
     >
-      <View style={styles.root}>
-        <Animated.View style={[styles.backdrop, { opacity: backdropOpacity }]}>
-          <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
-        </Animated.View>
+      {/* Subtle accent stripe along the top edge of the sheet — a clean
+          rectangle that respects the sheet radius via the parent's
+          overflow:'hidden', rather than a halo that bled into the stats. */}
+      <View
+        pointerEvents="none"
+        style={[styles.tintStripe, { backgroundColor: color }]}
+      />
 
-        <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-          style={styles.kav}
-          pointerEvents="box-none"
-        >
-          <Animated.View
-            style={[
-              styles.sheet,
-              {
-                backgroundColor: Colors.surface.elevated,
-                borderColor: withAlpha(color, '33'),
-                opacity: sheetOpacity,
-                transform: [{ translateY: sheetTranslate }, { scale: sheetScale }],
-              },
-            ]}
-          >
-            <View
-              pointerEvents="none"
-              style={[styles.tintGlow, { backgroundColor: color }]}
-            />
-            <View style={styles.handle} />
-
-            <Pressable
+      <Pressable
               onPress={onClose}
               accessibilityRole="button"
               accessibilityLabel="Close stake sheet"
@@ -237,6 +166,7 @@ export function StakeSheet({
                 stakeKobo={stakeKobo?.toString() ?? '0'}
                 multiplier={result.outcome.multiplier}
                 alreadyPlaced={result.alreadyPlaced}
+                lateFeeKobo={result.lateFeeKobo ?? null}
                 onClose={onClose}
               />
             ) : (
@@ -414,10 +344,7 @@ export function StakeSheet({
                 </Pressable>
               </>
             )}
-          </Animated.View>
-        </KeyboardAvoidingView>
-      </View>
-    </Modal>
+    </SheetBase>
   );
 }
 
@@ -440,6 +367,7 @@ function SuccessView({
   stakeKobo,
   multiplier,
   alreadyPlaced,
+  lateFeeKobo,
   onClose,
 }: {
   color: string;
@@ -447,8 +375,17 @@ function SuccessView({
   stakeKobo: string;
   multiplier: number | null;
   alreadyPlaced: boolean;
+  lateFeeKobo: string | null;
   onClose: () => void;
 }) {
+  const showLateFee =
+    !!lateFeeKobo && (() => {
+      try {
+        return BigInt(lateFeeKobo) > 0n;
+      } catch {
+        return false;
+      }
+    })();
   return (
     <View style={styles.successWrap}>
       <View style={[styles.successIcon, { backgroundColor: withAlpha(color, '26') }]}>
@@ -466,6 +403,11 @@ function SuccessView({
           ? `Live multiplier: ${multiplier}x`
           : 'Live multiplier: — (waiting for liquidity)'}
       </Text>
+      {showLateFee && lateFeeKobo ? (
+        <Text style={[styles.successMultiplier, { color: Colors.status.locked }]}>
+          {`Drama Mode late fee: ₦${formatKoboAsNaira(lateFeeKobo)} → late-fee pool`}
+        </Text>
+      ) : null}
       <Pressable
         onPress={onClose}
         accessibilityRole="button"
@@ -524,38 +466,21 @@ function nairaTextToKobo(text: string): bigint | null {
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, justifyContent: 'flex-end' },
-  kav: { width: '100%', justifyContent: 'flex-end' },
-  backdrop: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: '#000',
-  },
-  sheet: {
-    borderTopLeftRadius: rs.size(28),
-    borderTopRightRadius: rs.size(28),
-    borderTopWidth: 1,
-    paddingHorizontal: rs.size(20),
-    paddingTop: rs.size(10),
-    paddingBottom: rs.size(28),
+  sheetInner: {
     overflow: 'hidden',
+    paddingTop: rs.size(4),
+    paddingBottom: rs.size(20),
+    borderTopWidth: 1,
+    borderTopLeftRadius: rs.size(24),
+    borderTopRightRadius: rs.size(24),
   },
-  tintGlow: {
+  tintStripe: {
     position: 'absolute',
-    top: -rs.size(80),
-    left: -rs.size(40),
-    right: -rs.size(40),
-    height: rs.size(160),
-    opacity: 0.08,
-    borderBottomLeftRadius: rs.size(120),
-    borderBottomRightRadius: rs.size(120),
-  },
-  handle: {
-    alignSelf: 'center',
-    width: rs.size(40),
-    height: rs.size(5),
-    borderRadius: rs.size(3),
-    backgroundColor: Colors.border.strong,
-    marginBottom: rs.size(20),
+    top: 0,
+    left: 0,
+    right: 0,
+    height: rs.size(3),
+    opacity: 0.55,
   },
   closeBtn: {
     position: 'absolute',
@@ -573,6 +498,10 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: rs.size(10),
+    // Reserve room for the absolutely-positioned close button so the eyebrow
+    // text never slides under it on narrow screens.
+    paddingRight: rs.size(40),
+    marginTop: rs.size(4),
   },
   sideTag: {
     paddingHorizontal: rs.size(10),

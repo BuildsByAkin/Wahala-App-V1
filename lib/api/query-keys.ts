@@ -22,6 +22,7 @@ export const betKeys = {
   myBets: (filters: { status?: string; limit?: number; offset?: number }) =>
     [...betKeys.all, 'mine', filters] as const,
   mySummary: () => [...betKeys.all, 'mine', 'summary'] as const,
+  lockedByCamp: () => [...betKeys.all, 'mine', 'locked-by-camp'] as const,
 };
 
 export const depositKeys = {
@@ -59,4 +60,53 @@ export const withdrawalKeys = {
   list: () => [...withdrawalKeys.all, 'list'] as const,
   status: (id: string | undefined) =>
     [...withdrawalKeys.all, 'status', id] as const,
+};
+
+// ── v2 redesign keys (BACKEND.md §1, §4-§17) ────────────────────────────────
+
+export const categoryKeys = {
+  all: ['categories'] as const,
+  list: () => [...categoryKeys.all, 'list'] as const,
+};
+
+export const dailyWahalaKeys = {
+  all: ['daily-wahala'] as const,
+  current: () => [...dailyWahalaKeys.all, 'current'] as const,
+};
+
+export const activityKeys = {
+  all: ['activity'] as const,
+  list: (slug: string | undefined) =>
+    [...activityKeys.all, 'list', slug] as const,
+};
+
+export const campRosterKeys = {
+  all: ['camp-roster'] as const,
+  list: (
+    slug: string | undefined,
+    outcomeId: string | undefined,
+    params: { sort?: 'stake' | 'joined' } = {}
+  ) => [...campRosterKeys.all, slug, outcomeId, params] as const,
+};
+
+export const campChatKeys = {
+  all: ['camp-chat'] as const,
+  list: (
+    marketId: string | undefined,
+    outcomeId: string | undefined
+  ) => [...campChatKeys.all, marketId, outcomeId] as const,
+};
+
+export const roomKeys = {
+  all: ['room'] as const,
+  state: (marketId: string | undefined) =>
+    [...roomKeys.all, 'state', marketId] as const,
+};
+
+export const reactionKeys = {
+  all: ['reactions'] as const,
+};
+
+export const reportKeys = {
+  all: ['reports'] as const,
 };

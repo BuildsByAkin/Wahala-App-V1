@@ -16,19 +16,21 @@ import {
   View,
 } from 'react-native';
 import { Feather } from '@expo/vector-icons';
-import * as Haptics from 'expo-haptics';
 import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { Colors } from '@/constants/colors';
 import { Fonts } from '@/constants/fonts';
 import { rs } from '@/utils/responsive';
-import { formatKoboAsNaira } from '@/lib/utils/money';
 import { useAuth } from '@/features/auth';
 import {
   WithdrawalHistory,
   WithdrawalSheet,
   useMyWithdrawals,
 } from '@/features/withdrawals';
+import { PressableSpring } from '@/components/motion';
+import { BalanceHero } from '@/components/wallet';
+import { haptic } from '@/lib/motion/haptics';
 
 export default function WithdrawScreen() {
   const router = useRouter();
@@ -42,7 +44,7 @@ export default function WithdrawScreen() {
   const { refetch: refetchWithdrawals } = useMyWithdrawals();
 
   const onWithdrawPress = useCallback(() => {
-    Haptics.selectionAsync();
+    haptic.medium();
     setSheetVisible(true);
   }, []);
 
@@ -92,30 +94,32 @@ export default function WithdrawScreen() {
           />
         }
       >
-        <View style={styles.balanceBlock}>
-          <Text style={styles.balanceLabel}>AVAILABLE BALANCE</Text>
-          <Text
-            style={styles.balanceAmount}
-            numberOfLines={1}
-            adjustsFontSizeToFit
-          >
-            ₦{formatKoboAsNaira(walletAvailableKobo)}
-          </Text>
+        <View style={styles.heroBleed}>
+          <BalanceHero
+            availableKobo={walletAvailableKobo}
+            label="AVAILABLE TO WITHDRAW"
+            hint="Min ₦200 · Lands in your bank within 4 hours."
+          />
         </View>
 
-        <Pressable
-          onPress={onWithdrawPress}
-          accessibilityRole="button"
-          accessibilityLabel="Withdraw"
-          accessibilityHint="Start a withdrawal to your bank account"
-          style={({ pressed }) => [
-            styles.withdrawButton,
-            pressed && styles.withdrawButtonPressed,
-          ]}
-        >
-          <Feather name="arrow-up-right" size={rs.font(18)} color="#000000" />
-          <Text style={styles.withdrawLabel}>Withdraw</Text>
-        </Pressable>
+        <View style={styles.ctaWrap}>
+          <PressableSpring
+            onPress={onWithdrawPress}
+            variant="primary"
+            haptic="medium"
+            accessibilityLabel="Withdraw"
+            accessibilityHint="Start a withdrawal to your bank account"
+          >
+            <View style={styles.withdrawButton}>
+              <Feather
+                name="arrow-up-right"
+                size={rs.font(18)}
+                color={Colors.text.onAction}
+              />
+              <Text style={styles.withdrawLabel}>Withdraw</Text>
+            </View>
+          </PressableSpring>
+        </View>
 
         <WithdrawalHistory />
       </ScrollView>
@@ -159,42 +163,24 @@ const styles = StyleSheet.create({
     paddingHorizontal: rs.size(20),
     paddingBottom: rs.size(40),
   },
-  balanceBlock: {
-    marginTop: rs.size(16),
-    backgroundColor: '#111111',
-    borderRadius: rs.size(16),
-    padding: rs.size(20),
+  heroBleed: {
+    marginHorizontal: -rs.size(20),
   },
-  balanceLabel: {
-    fontFamily: Fonts.regular,
-    fontSize: rs.font(12),
-    color: '#666666',
-    letterSpacing: 0.6,
-    textTransform: 'uppercase',
-  },
-  balanceAmount: {
-    marginTop: rs.size(6),
-    fontFamily: Fonts.bold,
-    fontSize: rs.font(32),
-    color: '#FFFFFF',
-    includeFontPadding: false,
+  ctaWrap: {
+    marginTop: rs.size(20),
   },
   withdrawButton: {
-    marginTop: rs.size(20),
     height: rs.size(52),
     borderRadius: rs.size(12),
-    backgroundColor: '#FF6500',
+    backgroundColor: Colors.brand,
     alignItems: 'center',
     justifyContent: 'center',
     flexDirection: 'row',
     gap: rs.size(8),
   },
-  withdrawButtonPressed: {
-    opacity: 0.85,
-  },
   withdrawLabel: {
     fontFamily: Fonts.semibold,
     fontSize: rs.font(15),
-    color: '#000000',
+    color: Colors.text.onAction,
   },
 });

@@ -12,13 +12,29 @@ type Props = {
   totalPoolKobo: string;
   bettorCount: number;
   minStakeKobo: string;
+  /**
+   * BACKEND.md §9 — Drama-Mode late-fee pot. When present and > 0 we render
+   * a fourth cell so the user can see the bonus pool growing in real time.
+   */
+  lateFeePoolKobo?: string | null;
 };
+
+function hasLateFee(v: string | null | undefined): v is string {
+  if (!v) return false;
+  try {
+    return BigInt(v) > 0n;
+  } catch {
+    return false;
+  }
+}
 
 export function StatsStrip({
   totalPoolKobo,
   bettorCount,
   minStakeKobo,
+  lateFeePoolKobo,
 }: Props) {
+  const showLateFee = hasLateFee(lateFeePoolKobo);
   return (
     <View style={styles.wrap}>
       <Cell label="POOL" value={`₦${formatKoboAsCompactNaira(totalPoolKobo)}`} />
@@ -26,6 +42,15 @@ export function StatsStrip({
       <Cell label="STAKERS" value={String(bettorCount)} />
       <Sep />
       <Cell label="MIN BET" value={`₦${formatKoboAsCompactNaira(minStakeKobo)}`} />
+      {showLateFee && lateFeePoolKobo ? (
+        <>
+          <Sep />
+          <Cell
+            label="LATE FEE"
+            value={`₦${formatKoboAsCompactNaira(lateFeePoolKobo)}`}
+          />
+        </>
+      ) : null}
     </View>
   );
 }

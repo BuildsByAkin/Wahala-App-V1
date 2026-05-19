@@ -1,19 +1,14 @@
 // features/withdrawals/components/panes/amount-pane.tsx
 import React from 'react';
-import {
-  Pressable,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
-} from 'react-native';
-import * as Haptics from 'expo-haptics';
+import { StyleSheet, Text, TextInput, View } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 
 import { Fonts } from '@/constants/fonts';
 import { rs } from '@/utils/responsive';
 import { formatKoboAsNaira } from '@/lib/utils/money';
 import { sanitizeNairaInput } from '@/features/withdrawals/api/withdrawals-api';
+import { PressableSpring } from '@/components/motion';
+import { QuickAmountChip } from '@/components/wallet';
 import { sheetStyles, ACCENT } from '../sheet-styles';
 
 const QUICK = [1_000, 2_000, 5_000, 10_000, 20_000];
@@ -66,23 +61,18 @@ export function AmountPane({
       </View>
 
       <View style={styles.chipsRow}>
-        {QUICK.map((n) => (
-          <Pressable
-            key={n}
-            onPress={() => {
-              Haptics.selectionAsync();
-              onChangeValue(String(n));
-            }}
-            accessibilityRole="button"
-            accessibilityLabel={`Quick withdraw ${n} naira`}
-            style={({ pressed }) => [
-              styles.chip,
-              pressed && styles.chipPressed,
-            ]}
-          >
-            <Text style={styles.chipText}>₦{n.toLocaleString()}</Text>
-          </Pressable>
-        ))}
+        {QUICK.map((n) => {
+          const selected = value === String(n);
+          return (
+            <QuickAmountChip
+              key={n}
+              amount={n}
+              selected={selected}
+              hasSelection={QUICK.some((q) => value === String(q))}
+              onPress={() => onChangeValue(String(n))}
+            />
+          );
+        })}
       </View>
 
       {validation.reason ? (
@@ -96,19 +86,19 @@ export function AmountPane({
         </View>
       ) : null}
 
-      <Pressable
+      <PressableSpring
         onPress={onContinue}
         disabled={!validation.ok}
-        accessibilityRole="button"
+        variant="primary"
+        haptic="medium"
         accessibilityLabel="Continue"
         accessibilityHint="Proceed to choose a destination account"
-        style={({ pressed }) => [
-          sheetStyles.submit,
-          { opacity: !validation.ok ? 0.4 : pressed ? 0.85 : 1 },
-        ]}
+        style={{ opacity: !validation.ok ? 0.4 : 1 }}
       >
-        <Text style={sheetStyles.submitText}>Continue</Text>
-      </Pressable>
+        <View style={sheetStyles.submit}>
+          <Text style={sheetStyles.submitText}>Continue</Text>
+        </View>
+      </PressableSpring>
 
       <Text style={styles.slaNote} accessibilityRole="text">
         Withdrawals are processed within 4 hours
@@ -164,20 +154,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: rs.size(8),
-  },
-  chip: {
-    paddingHorizontal: rs.size(14),
-    paddingVertical: rs.size(8),
-    borderRadius: rs.size(9999),
-    backgroundColor: '#181818',
-    borderWidth: 1,
-    borderColor: '#222222',
-  },
-  chipPressed: { opacity: 0.85 },
-  chipText: {
-    fontFamily: Fonts.semibold,
-    fontSize: rs.font(13),
-    color: '#DDDDDD',
   },
   slaNote: {
     marginTop: rs.size(12),

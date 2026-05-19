@@ -27,7 +27,6 @@ import { Feather } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { useRouter } from 'expo-router';
 import Animated, {
-  Easing,
   useAnimatedStyle,
   useSharedValue,
   withRepeat,
@@ -40,6 +39,9 @@ import { useAuth } from '@/features/auth';
 import { useLeaderboard, type LeaderboardEntry } from '@/features/leaderboard';
 import { formatKoboAsCompactNaira } from '@/lib/utils/money';
 import { getInitial } from '@/utils/market';
+import { PressableSpring } from '@/components/motion';
+import { time } from '@/lib/motion/timings';
+import { useReducedMotion } from '@/hooks/useReducedMotion';
 
 const BRAND = '#FF6500';
 const GOLD = '#FFC83D';
@@ -97,11 +99,21 @@ export default function LeaderboardScreen() {
     router.push('/(tabs)/profile');
   }, [router]);
 
+  // The "you're hidden" CTA used to sit pinned at the bottom of the screen;
+  // we now render it as a top banner so it's visible the moment the page
+  // opens, regardless of how far the user scrolls. The bottom area is
+  // reserved for the YouFooter (your live rank) when the user is on-board.
+  const topNotice =
+    !myEntry && !leaderboardOptIn ? (
+      <OptInBanner onPress={goToProfile} />
+    ) : null;
+
   // ── Render branches ──────────────────────────────────────────────────────
   if (isLoading) {
     return (
       <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
         <Header count={null} />
+        {topNotice}
         <View style={styles.center}>
           <ActivityIndicator color={BRAND} />
         </View>
@@ -113,6 +125,7 @@ export default function LeaderboardScreen() {
     return (
       <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
         <Header count={null} />
+        {topNotice}
         <ErrorState onRetry={refetch} />
       </SafeAreaView>
     );
@@ -122,6 +135,7 @@ export default function LeaderboardScreen() {
     return (
       <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
         <Header count={0} />
+        {topNotice}
         <EmptyState />
       </SafeAreaView>
     );
@@ -129,6 +143,8 @@ export default function LeaderboardScreen() {
 
   return (
     <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
+      <Header count={entries.length} />
+      {topNotice}
       <ScrollView
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
@@ -142,8 +158,6 @@ export default function LeaderboardScreen() {
           />
         }
       >
-        <Header count={entries.length} />
-
         {podium.length >= 1 ? (
           <Podium entries={podium} myUserId={userId} />
         ) : null}
@@ -164,6 +178,8 @@ export default function LeaderboardScreen() {
           </View>
         ) : null}
 
+        <FollowComingSoonNote />
+
         {isFetchingNextPage ? (
           <View style={styles.footerLoader}>
             <ActivityIndicator color={BRAND} />
@@ -173,13 +189,9 @@ export default function LeaderboardScreen() {
         ) : null}
       </ScrollView>
 
-      {/* Sticky personal footer — your rank if you're on the board, opt-in
-          CTA if you're hidden, nothing if you're opted in but not yet ranked. */}
-      {myEntry ? (
-        <YouFooter entry={myEntry} />
-      ) : !leaderboardOptIn ? (
-        <OptInFooter onPress={goToProfile} />
-      ) : null}
+      {/* Sticky personal footer — only your rank when you're on the board.
+          The opt-in CTA is pinned to the top of the screen (see topNotice). */}
+      {myEntry ? <YouFooter entry={myEntry} /> : null}
     </SafeAreaView>
   );
 }
@@ -292,16 +304,18 @@ function PodiumCard({
   const avatarSize = isWinner ? rs.size(76) : rs.size(60);
 
   // Slow, gentle pulse halo around the winner — communicates "live" and
-  // hierarchy without being noisy. Side cards stay still.
+  // hierarchy without being noisy. Side cards stay still. Driven by the
+  // `time.slow` easing preset (extended to 1800ms for the breathing rhythm).
+  const reduced = useReducedMotion();
   const pulse = useSharedValue(0);
   useEffect(() => {
-    if (!isWinner) return;
+    if (!isWinner || reduced) return;
     pulse.value = withRepeat(
-      withTiming(1, { duration: 1800, easing: Easing.inOut(Easing.ease) }),
+      withTiming(1, { ...time.slow, duration: 1800 }),
       -1,
       true
     );
-  }, [isWinner, pulse]);
+  }, [isWinner, reduced, pulse]);
 
   const haloStyle = useAnimatedStyle(() => ({
     opacity: 0.35 + pulse.value * 0.45,
@@ -465,33 +479,39 @@ function RankRow({
   const name = entry.displayName?.trim() || entry.username;
 
   return (
-    <View
-      style={[
-        styles.rankRow,
-        !isLast && styles.rankRowDivider,
-        isMe && styles.rankRowMe,
-      ]}
+    <PressableSpring
+      haptic="tap"
+      accessibilityLabel={`Rank ${entry.rank}, ${name}`}
+      accessibilityHint="Highlights this competitor"
     >
-      <Text style={styles.rankRowNum}>{entry.rank}</Text>
+      <View
+        style={[
+          styles.rankRow,
+          !isLast && styles.rankRowDivider,
+          isMe && styles.rankRowMe,
+        ]}
+      >
+        <Text style={styles.rankRowNum}>{entry.rank}</Text>
 
-      <View style={styles.rankRowAvatar}>
-        <Text style={styles.rankRowAvatarText}>{initial}</Text>
-      </View>
+        <View style={styles.rankRowAvatar}>
+          <Text style={styles.rankRowAvatarText}>{initial}</Text>
+        </View>
 
-      <View style={styles.rankRowMid}>
-        <Text style={styles.rankRowName} numberOfLines={1}>
-          {name}
-          {isMe ? <Text style={styles.youTag}>  · You</Text> : null}
-        </Text>
-        <Text style={styles.rankRowSub} numberOfLines={1}>
-          @{entry.username} · {entry.winsCount} {entry.winsCount === 1 ? 'win' : 'wins'}
-        </Text>
-      </View>
+        <View style={styles.rankRowMid}>
+          <Text style={styles.rankRowName} numberOfLines={1}>
+            {name}
+            {isMe ? <Text style={styles.youTag}>  · You</Text> : null}
+          </Text>
+          <Text style={styles.rankRowSub} numberOfLines={1}>
+            @{entry.username} · {entry.winsCount} {entry.winsCount === 1 ? 'win' : 'wins'}
+          </Text>
+        </View>
 
-      <View style={styles.rankRowRight}>
-        <ProfitText profitKobo={entry.netProfitKobo} emphasis={false} />
+        <View style={styles.rankRowRight}>
+          <ProfitText profitKobo={entry.netProfitKobo} emphasis={false} />
+        </View>
       </View>
-    </View>
+    </PressableSpring>
   );
 }
 
@@ -541,9 +561,9 @@ function YouFooter({ entry }: { entry: LeaderboardEntry }) {
   );
 }
 
-function OptInFooter({ onPress }: { onPress: () => void }) {
+function OptInBanner({ onPress }: { onPress: () => void }) {
   return (
-    <View style={styles.footerWrap} pointerEvents="box-none">
+    <View style={styles.topNoticeWrap}>
       <Pressable
         onPress={onPress}
         accessibilityRole="button"
@@ -567,6 +587,32 @@ function OptInFooter({ onPress }: { onPress: () => void }) {
           <Feather name="chevron-right" size={rs.font(14)} color="#0A0A0A" />
         </View>
       </Pressable>
+    </View>
+  );
+}
+
+// Soft teaser card so users know the social layer (following the top
+// profitable predictors) is on the roadmap. Pure-display — no CTA.
+function FollowComingSoonNote() {
+  return (
+    <View style={styles.comingSoonWrap}>
+      <View style={styles.comingSoonCard}>
+        <View style={styles.comingSoonIcon}>
+          <Feather name="user-plus" size={rs.font(16)} color={BRAND} />
+        </View>
+        <View style={styles.comingSoonBody}>
+          <View style={styles.comingSoonHeaderRow}>
+            <Text style={styles.comingSoonTitle}>Follow top predictors</Text>
+            <View style={styles.comingSoonBadge}>
+              <Text style={styles.comingSoonBadgeText}>SOON</Text>
+            </View>
+          </View>
+          <Text style={styles.comingSoonHint}>
+            Soon you go fit follow the most profitable predictors and copy
+            their picks straight from this board.
+          </Text>
+        </View>
+      </View>
     </View>
   );
 }
@@ -936,6 +982,14 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
   },
 
+  // Pinned-to-top wrapper for the opt-in CTA. Horizontal insets mirror the
+  // other top-of-screen elements (Header) so the banner aligns with the
+  // overall page grid rather than the bottom safe-area inset.
+  topNoticeWrap: {
+    paddingHorizontal: rs.size(16),
+    paddingTop: rs.size(4),
+    paddingBottom: rs.size(8),
+  },
   optInCard: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -946,6 +1000,67 @@ const styles = StyleSheet.create({
     borderColor: '#3A2410',
     paddingVertical: rs.size(12),
     paddingHorizontal: rs.size(12),
+  },
+  // "Follow top predictors — coming soon" note shown at the bottom of the
+  // ranked list. Sits flush with the same horizontal grid as the rankings.
+  comingSoonWrap: {
+    marginTop: rs.size(20),
+    paddingHorizontal: rs.size(16),
+  },
+  comingSoonCard: {
+    flexDirection: 'row',
+    gap: rs.size(12),
+    backgroundColor: SURFACE,
+    borderRadius: rs.size(16),
+    borderWidth: 1,
+    borderColor: HAIRLINE,
+    paddingVertical: rs.size(14),
+    paddingHorizontal: rs.size(14),
+    borderStyle: 'dashed',
+  },
+  comingSoonIcon: {
+    width: rs.size(36),
+    height: rs.size(36),
+    borderRadius: rs.size(9999),
+    backgroundColor: '#1A1208',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  comingSoonBody: {
+    flex: 1,
+    minWidth: 0,
+  },
+  comingSoonHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: rs.size(8),
+  },
+  comingSoonTitle: {
+    fontFamily: Fonts.semibold,
+    fontSize: rs.font(14),
+    color: '#FFFFFF',
+    flexShrink: 1,
+  },
+  comingSoonBadge: {
+    paddingHorizontal: rs.size(8),
+    paddingVertical: rs.size(2),
+    borderRadius: rs.size(9999),
+    backgroundColor: '#2A1808',
+    borderWidth: 1,
+    borderColor: '#3A2410',
+  },
+  comingSoonBadgeText: {
+    fontFamily: Fonts.bold,
+    fontSize: rs.font(9),
+    color: BRAND,
+    letterSpacing: 1,
+  },
+  comingSoonHint: {
+    marginTop: rs.size(6),
+    fontFamily: Fonts.regular,
+    fontSize: rs.font(12),
+    lineHeight: rs.font(17),
+    color: '#888888',
   },
   optInIcon: {
     width: rs.size(40),

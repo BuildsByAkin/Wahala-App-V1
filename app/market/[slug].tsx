@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -18,16 +18,40 @@ import { Colors } from '@/constants/colors';
 import { Fonts } from '@/constants/fonts';
 import { rs } from '@/utils/responsive';
 import { useMarket, type DetailOutcome } from '@/hooks/useMarket';
+import {
+  useActivityFeed,
+  useCampRoster,
+} from '@/features/markets';
+import { useMarketStream } from '@/features/realtime/hooks/use-market-stream';
+import { useRoomState } from '@/features/audio-room';
+import { useCampChat } from '@/features/camp-chat/hooks/use-camp-chat';
+import { useSendCampChat } from '@/features/camp-chat/hooks/use-send-camp-chat';
+import { useSendReaction } from '@/features/reactions/hooks/use-send-reaction';
+import {
+  ReactionConfetti,
+  type ReactionConfettiHandle,
+} from '@/components/market/ReactionConfetti';
 import { useComments, type Comment } from '@/hooks/useComments';
 import { useToggleLike } from '@/hooks/useToggleLike';
 import { useCreateComment } from '@/hooks/useCreateComment';
-import { CommentComposerSheet } from '@/components/market/comment-composer-sheet';
 import { OutcomeRow } from '@/components/market/outcome-row';
 import { StatsStrip } from '@/components/market/stats-strip';
 import { StatusPill } from '@/components/market/status-pill';
 import { PulseRail } from '@/components/market/pulse-rail';
-import { SidePanel, type PanelState } from '@/components/market/side-panel';
+import { type PanelState } from '@/components/market/side-panel';
+import { CampSplitHeader, type CampPanelState } from '@/components/market/CampSplitHeader';
+import { ActivityTape, type ActivityEntry } from '@/components/market/ActivityTape';
+import { DramaMode } from '@/components/market/DramaMode';
+import { LiveAudioRoom } from '@/components/market/LiveAudioRoom';
+import { Resolution } from '@/components/market/Resolution';
+import { CampRoster, type RosterMember } from '@/components/market/CampRoster';
+import { CommentRow } from '@/components/market/CommentRow';
+import { CommentComposer } from '@/components/market/CommentComposer';
+import { Gist, type GistTab } from '@/components/market/Gist';
+import { SheetBase } from '@/components/motion/SheetBase';
+import { useDramaMode } from '@/hooks/useDramaMode';
 import {
+  formatPoolKobo,
   getAvatarColor,
   getInitial,
   outcomeColor,
@@ -40,83 +64,28 @@ import {
   StakeSheet,
   groupBetsIntoPositions,
   useMyBets,
+  useSwitchOutcome,
 } from '@/features/betting';
+import { StanceChangeEvent } from '@/components/market/StanceChangeEvent';
 
 const PULSE_YES = '#14B8A6';
 const PULSE_NO = '#6366F1';
 
-function isYesLabel(label: string) {
+function isYesLabel(label: string | null | undefined) {
+  if (typeof label !== 'string') return false;
   return /^y(es)?$/i.test(label.trim());
 }
-function isNoLabel(label: string) {
+function isNoLabel(label: string | null | undefined) {
+  if (typeof label !== 'string') return false;
   return /^n(o)?$/i.test(label.trim());
 }
 
-function shortTag(label: string): string {
+function shortTag(label: string | null | undefined): string {
+  if (typeof label !== 'string') return '';
   const trimmed = label.trim();
   if (isYesLabel(trimmed)) return 'YES';
   if (isNoLabel(trimmed)) return 'NO';
   return trimmed.slice(0, 3).toUpperCase();
-}
-
-function CommentRow({
-  comment,
-  outcomeIndexByLabel,
-  onToggleLike,
-  isPending,
-  resolveColor,
-}: {
-  comment: Comment;
-  outcomeIndexByLabel: Map<string, number>;
-  onToggleLike: (commentId: string) => void;
-  isPending: boolean;
-  resolveColor: (index: number) => string;
-}) {
-  const avatarColor = getAvatarColor(comment.author.userId);
-  const initial = getInitial(comment.author.displayName, comment.author.username);
-  const name = comment.author.displayName || comment.author.username;
-
-  const betLabel = comment.bet?.outcomeLabel ?? null;
-  const betIdx = betLabel != null ? outcomeIndexByLabel.get(betLabel) : undefined;
-  const betColor = typeof betIdx === 'number' ? resolveColor(betIdx) : Colors.text.secondary;
-  const betBg = `${betColor}26`;
-  const betBorder = `${betColor}66`;
-
-  const liked = comment.hasLiked;
-  const heartColor = liked ? Colors.brand : Colors.border.strong;
-
-  return (
-    <View style={styles.commentRow}>
-      <View style={[styles.avatar36, { backgroundColor: avatarColor }]}>
-        <Text style={styles.avatar36Text}>{initial}</Text>
-      </View>
-      <View style={styles.commentBody}>
-        <View style={styles.commentHeader}>
-          <Text style={styles.commentName}>{name}</Text>
-          {betLabel && (
-            <View style={[styles.betPill, { backgroundColor: betBg, borderColor: betBorder }]}>
-              <Text style={[styles.betPillText, { color: betColor }]}>{betLabel}</Text>
-            </View>
-          )}
-        </View>
-        <Text style={styles.commentText}>{comment.body}</Text>
-        <View style={styles.commentMeta}>
-          <Text style={styles.metaText}>{timeAgo(comment.createdAt)}</Text>
-          <Pressable
-            onPress={() => onToggleLike(comment.id)}
-            disabled={isPending}
-            hitSlop={8}
-            accessibilityRole="button"
-            accessibilityLabel={liked ? 'Unlike comment' : 'Like comment'}
-            style={styles.metaIconGroup}
-          >
-            <Feather name="heart" size={rs.font(13)} color={heartColor} />
-            <Text style={[styles.metaText, { color: heartColor }]}>{comment.likeCount}</Text>
-          </Pressable>
-        </View>
-      </View>
-    </View>
-  );
 }
 
 export default function MarketDetailScreenWrapper() {
@@ -137,6 +106,31 @@ function MarketDetailScreen() {
   const { comments, isLoading: commentsLoading } = useComments(market?.id);
   const { userId, displayName, username } = useAuth();
   const { bets: myActiveBets } = useMyBets({ status: 'active' });
+
+  // BACKEND.md §3 — open the SSE stream while the screen is mounted so the
+  // motion library (TickFlash, RailBreathe, ActivityTape) animates from
+  // real cache diffs instead of waiting for the next refetch interval.
+  // The reaction confetti layer is mounted further down — push inbound
+  // reaction events to it via the imperative `fire(emoji)` handle.
+  const confettiRef = useRef<ReactionConfettiHandle | null>(null);
+  useMarketStream(slug, market?.id, {
+    onReaction: (evt) => confettiRef.current?.fire(evt.emoji),
+  });
+
+  // BACKEND.md §9 — outbound reactions throttled client-side at 5/sec.
+  const { send: sendReaction } = useSendReaction(market?.id);
+
+  // BACKEND.md §8 — real activity tape. Replaces the synthesized stand-in
+  // that used to live inside MarketBody.
+  const activityFeed = useActivityFeed(slug);
+  const activityEvents = useMemo(
+    () => activityFeed.data?.pages.flatMap((p) => p.events) ?? [],
+    [activityFeed.data]
+  );
+
+  // BACKEND.md §12 — read-only room state. Audio band only renders when the
+  // server says a room is active.
+  const { data: roomState } = useRoomState(market?.id);
 
   const myStakeByOutcomeId = useMemo(() => {
     if (!market) return new Map<string, string>();
@@ -169,9 +163,10 @@ function MarketDetailScreen() {
 
   const binaryColors = useMemo<[string, string]>(() => {
     if (!isBinary) return [PULSE_YES, PULSE_NO];
-    const [a, b] = outcomes;
-    if (isYesLabel(a.label)) return [PULSE_YES, PULSE_NO];
-    if (isYesLabel(b.label)) return [PULSE_NO, PULSE_YES];
+    const a = outcomes[0];
+    const b = outcomes[1];
+    if (a && isYesLabel(a.label)) return [PULSE_YES, PULSE_NO];
+    if (b && isYesLabel(b.label)) return [PULSE_NO, PULSE_YES];
     return [PULSE_YES, PULSE_NO];
   }, [isBinary, outcomes]);
 
@@ -197,16 +192,110 @@ function MarketDetailScreen() {
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [originY, setOriginY] = useState<number | undefined>(undefined);
   const [lockedNoticeOpen, setLockedNoticeOpen] = useState(false);
-  const [attemptedLabel, setAttemptedLabel] = useState<string | null>(null);
+  const [attemptedOutcomeId, setAttemptedOutcomeId] = useState<string | null>(null);
+
+  const attemptedOutcome = useMemo(
+    () =>
+      attemptedOutcomeId
+        ? outcomes.find((o) => o.id === attemptedOutcomeId) ?? null
+        : null,
+    [attemptedOutcomeId, outcomes]
+  );
+  const attemptedOutcomeIndex = useMemo(
+    () =>
+      attemptedOutcomeId
+        ? outcomes.findIndex((o) => o.id === attemptedOutcomeId)
+        : -1,
+    [attemptedOutcomeId, outcomes]
+  );
+  const attemptedLabel = attemptedOutcome?.label ?? null;
+  const attemptedColor =
+    attemptedOutcomeIndex >= 0
+      ? resolveOutcomeColor(attemptedOutcomeIndex)
+      : Colors.brand;
+
+  // BACKEND.md §7 — switch the user's active stake on the locked outcome to
+  // the attempted outcome. We resolve the betId lazily at click time so a
+  // brand-new bet placed seconds before is included.
+  const switchMutation = useSwitchOutcome({ marketSlug: slug });
+  const switchFeeLabel = switchMutation.feeKobo
+    ? `₦${formatPoolKobo(switchMutation.feeKobo)}`
+    : null;
 
   const [pendingLikes, setPendingLikes] = useState<Set<string>>(new Set());
   const toggleLikeMutation = useToggleLike(market?.id);
 
-  const [composerOpen, setComposerOpen] = useState(false);
   const createCommentMutation = useCreateComment(market?.id);
+
+  const [activeTab, setActiveTab] = useState<GistTab>('public');
+  // Auto-snap back to public if the user defects out of their camp (locked
+  // outcome cleared) so they don't get stuck on an empty tab.
+  useEffect(() => {
+    if (activeTab === 'camp' && !lockedOutcomeId) setActiveTab('public');
+  }, [activeTab, lockedOutcomeId]);
+
+  // BACKEND.md §6 — camp-only chat. We only fetch when the user has a
+  // stance AND the camp tab is selected; the hook bails internally
+  // otherwise via `enabled`.
+  const inCampMode = activeTab === 'camp' && !!lockedOutcomeId;
+  const campChatQuery = useCampChat(
+    inCampMode ? market?.id : undefined,
+    inCampMode ? (lockedOutcomeId ?? undefined) : undefined
+  );
+  const sendCampChatMutation = useSendCampChat();
+
+  // Adapter — camp messages render through the existing CommentRow path so
+  // we don't have to fork the FlashList. Likes/replies/bet-pill are nulled
+  // out because camp chat has no such affordances.
+  const campComments = useMemo<Comment[]>(() => {
+    if (!inCampMode) return [];
+    const pages = campChatQuery.data?.pages ?? [];
+    const flat = pages.flatMap((p) => p.messages);
+    const lockedLabel =
+      outcomes.find((o) => o.id === lockedOutcomeId)?.label ?? null;
+    return flat
+      .filter((m) => !m.isDeleted && m.moderationStatus === 'visible')
+      .map<Comment>((m) => ({
+        id: m.id,
+        body: m.body,
+        createdAt: m.createdAt,
+        author: {
+          userId: m.author.userId,
+          username: m.author.username,
+          displayName: m.author.displayName,
+          role: 'user',
+        },
+        bet: lockedLabel ? { outcomeLabel: lockedLabel } : null,
+        likeCount: 0,
+        replyCount: 0,
+        hasLiked: false,
+        isOwn: m.author.userId === userId,
+        isDeleted: false,
+        moderationStatus: 'visible',
+      }));
+  }, [
+    inCampMode,
+    campChatQuery.data,
+    outcomes,
+    lockedOutcomeId,
+    userId,
+  ]);
+
+  const visibleComments = inCampMode ? campComments : comments;
+  const visibleCommentsLoading = inCampMode
+    ? campChatQuery.isLoading
+    : commentsLoading;
+  const [rosterSide, setRosterSide] = useState<'leading' | 'trailing' | null>(null);
+  const [resolutionDismissed, setResolutionDismissed] = useState(false);
 
   const yesRef = useRef<View>(null);
   const noRef = useRef<View>(null);
+
+  const { isDrama, secondsLeft } = useDramaMode(market?.closesAt, market?.status);
+  const dramaGlow = useMemo(() => {
+    if (isBinary) return binaryColors[0];
+    return Colors.brand;
+  }, [isBinary, binaryColors]);
 
   const handleToggleLike = useCallback(
     (commentId: string) => {
@@ -234,7 +323,7 @@ function MarketDetailScreen() {
       if (!market) return;
       if (!isOpen) return;
       if (lockedOutcomeId && lockedOutcomeId !== outcome.id) {
-        setAttemptedLabel(outcome.label);
+        setAttemptedOutcomeId(outcome.id);
         setLockedNoticeOpen(true);
         return;
       }
@@ -274,25 +363,81 @@ function MarketDetailScreen() {
     setTimeout(() => openStakeFor(lockedOutcome, lockedOutcomeIndex), 180);
   };
 
+  const handleSwitchToAttempted = useCallback(() => {
+    if (!market || !lockedOutcomeId || !attemptedOutcomeId) return;
+    // Pick the most recent active bet on the locked outcome — server
+    // applies the switch to that lineage and the cascade handles the rest.
+    const candidateBet = myActiveBets
+      .filter(
+        (b) => b.marketId === market.id && b.outcomeId === lockedOutcomeId
+      )
+      .sort(
+        (a, b) =>
+          new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+      )[0];
+    if (!candidateBet) {
+      Alert.alert(
+        'No active stake',
+        'We could not find an active stake to switch.'
+      );
+      return;
+    }
+    switchMutation
+      .switchOutcome({
+        betId: candidateBet.id,
+        targetOutcomeId: attemptedOutcomeId,
+        marketId: market.id,
+        previousOutcomeId: lockedOutcomeId,
+      })
+      .then(() => {
+        Haptics.notificationAsync(
+          Haptics.NotificationFeedbackType.Success
+        ).catch(() => {});
+        setLockedNoticeOpen(false);
+        setAttemptedOutcomeId(null);
+      })
+      .catch((err) => {
+        const e = err as { code?: string; message?: string };
+        const title =
+          e.code === 'market_closed'
+            ? 'Market closed'
+            : e.code === 'invalid_target'
+            ? 'Cannot switch'
+            : e.code === 'unauthorized'
+            ? 'Sign in required'
+            : 'Switch failed';
+        Alert.alert(title, e.message ?? 'Something went wrong.');
+      });
+  }, [
+    market,
+    lockedOutcomeId,
+    attemptedOutcomeId,
+    myActiveBets,
+    switchMutation,
+  ]);
+
   const hasActivePosition = myStakeByOutcomeId.size > 0;
   const composerEnabled = isOpen && hasActivePosition;
 
-  const handleInputPress = () => {
-    if (!market) return;
-    if (!isOpen) return;
-    if (!hasActivePosition) {
-      Alert.alert('Stake first', 'You need an active bet to join the gist.');
-      return;
-    }
-    setComposerOpen(true);
-  };
-
   const handleSubmitComment = (body: string) => {
     if (!market) return;
+    if (inCampMode && lockedOutcomeId) {
+      sendCampChatMutation.mutate(
+        { marketId: market.id, outcomeId: lockedOutcomeId, body },
+        {
+          onError: (err) => {
+            const message =
+              (err as { response?: { data?: { message?: string } } })?.response?.data?.message ??
+              'Could not send to your camp. Try again.';
+            Alert.alert('Camp chat failed', message);
+          },
+        }
+      );
+      return;
+    }
     createCommentMutation.mutate(
       { body },
       {
-        onSuccess: () => setComposerOpen(false),
         onError: (err) => {
           const message =
             (err as { response?: { data?: { message?: string } } })?.response?.data?.message ??
@@ -323,6 +468,87 @@ function MarketDetailScreen() {
     ),
     [outcomeIndexByLabel, pendingLikes, resolveOutcomeColor, handleToggleLike]
   );
+
+  // Camp / outcome lookup for the inline composer's stance pill.
+  const myOutcomeIndex = useMemo(
+    () => (lockedOutcomeId ? outcomes.findIndex((o) => o.id === lockedOutcomeId) : -1),
+    [lockedOutcomeId, outcomes]
+  );
+  const myOutcomeColor =
+    myOutcomeIndex >= 0 ? resolveOutcomeColor(myOutcomeIndex) : Colors.brand;
+  const myOutcomeLabel = myOutcomeIndex >= 0 ? outcomes[myOutcomeIndex]?.label ?? null : null;
+
+  // Roster sheet — real members come from BACKEND.md §5.2. We only fetch
+  // when the sheet is open (the hook is gated by both slug + outcomeId).
+  const rosterOutcome = useMemo<DetailOutcome | null>(() => {
+    if (!rosterSide) return null;
+    if (!isBinary) return null;
+    return rosterSide === 'leading' ? outcomes[0] ?? null : outcomes[1] ?? null;
+  }, [rosterSide, isBinary, outcomes]);
+
+  const rosterQuery = useCampRoster(
+    rosterOutcome ? slug : undefined,
+    rosterOutcome?.id,
+    { sort: 'stake' }
+  );
+
+  const rosterMembers = useMemo<RosterMember[]>(() => {
+    const real = rosterQuery.data?.members ?? [];
+    return real.map((m) => ({
+      id: m.userId,
+      initial: getInitial(m.displayName, m.username),
+      name: m.displayName ?? m.username,
+      stakeKobo: m.stakeKobo,
+      isYou: m.userId === userId,
+    }));
+  }, [rosterQuery.data, userId]);
+
+  // Resolution overlay — server now exposes `resolvedOutcomeId` (BACKEND.md
+  // §16). When the user's locked outcome matches we render the win variant
+  // with the *actual* payout from /me/bets; otherwise render the loss
+  // variant against their original stake.
+  const showResolution = isResolved && !resolutionDismissed && hasActivePosition;
+  const resolutionVariant = useMemo(() => {
+    const winnerId = market?.resolvedOutcomeId ?? null;
+    const userIsWinner = !!winnerId && !!lockedOutcomeId && winnerId === lockedOutcomeId;
+    if (userIsWinner) {
+      // Real payout — sum of every /me/bets entry on the winning outcome.
+      const myWin = myActiveBets
+        .filter((b) => b.marketId === market?.id && b.outcomeId === winnerId)
+        .reduce((acc, b) => acc + (b.payoutKobo ? BigInt(b.payoutKobo) : 0n), 0n)
+        .toString();
+      return {
+        kind: 'win' as const,
+        campColor: myOutcomeColor,
+        payoutLabel: `+${formatPoolKobo(myWin)}`,
+      };
+    }
+    const stake = lockedOutcomeId ? myStakeByOutcomeId.get(lockedOutcomeId) ?? '0' : '0';
+    return { kind: 'loss' as const, stakeLabel: formatPoolKobo(stake) };
+  }, [
+    market?.resolvedOutcomeId,
+    market?.id,
+    lockedOutcomeId,
+    myStakeByOutcomeId,
+    myOutcomeColor,
+    myActiveBets,
+  ]);
+
+  // Live audio room — speakers come from /markets/:id/room. We only render
+  // the band when the server reports the room is active (and we're in
+  // Drama Mode), so this hook safely returns empty otherwise.
+  const liveSpeakers = useMemo(() => {
+    if (!roomState?.speakers) return [];
+    return roomState.speakers.map((s, i) => ({
+      id: s.userId,
+      initial: getInitial(s.displayName, s.userId),
+      color: s.avatarColor ?? binaryColors[i % 2] ?? Colors.brand,
+      speaking: !s.isMuted,
+    }));
+  }, [roomState?.speakers, binaryColors]);
+
+  const isRoomActive = roomState?.isActive ?? false;
+  const liveListenerCount = roomState?.listenerCount ?? 0;
 
   if (isLoading) {
     return (
@@ -359,7 +585,7 @@ function MarketDetailScreen() {
         >
           <Feather name="arrow-left" size={rs.font(22)} color={Colors.text.primary} />
         </Pressable>
-        {market ? (
+        {market && market.category ? (
           <View style={styles.categoryPill}>
             <Text style={styles.categoryText}>{market.category.toUpperCase()}</Text>
           </View>
@@ -379,6 +605,7 @@ function MarketDetailScreen() {
             <Text style={styles.errorText}>Couldn&apos;t load this market. Try again in a moment.</Text>
           </View>
         ) : (
+          <ErrorBoundary label="MarketBody">
           <MarketBody
             market={market}
             outcomes={outcomes}
@@ -396,33 +623,69 @@ function MarketDetailScreen() {
             yesRef={yesRef}
             noRef={noRef}
             selectedOutcomeId={betSheetOpen ? selectedOutcome?.id ?? null : null}
-            comments={comments}
-            commentsLoading={commentsLoading}
+            comments={visibleComments}
+            commentsLoading={visibleCommentsLoading}
             outcomeIndexByLabel={outcomeIndexByLabel}
             renderComment={renderComment}
             myStakeByOutcomeId={myStakeByOutcomeId}
             lockedOutcomeId={lockedOutcomeId}
+            isDrama={isDrama}
+            dramaSecondsLeft={secondsLeft}
+            activeTab={activeTab}
+            onChangeTab={setActiveTab}
+            hasStance={hasActivePosition}
+            myCampLabel={myOutcomeLabel}
+            myCampColor={myOutcomeColor}
+            onOpenRoster={(side) => setRosterSide(side)}
+            activityEvents={activityEvents}
           />
+          </ErrorBoundary>
         )}
 
-        {composerEnabled || isOpen ? (
-          <View style={[styles.inputBar, { paddingBottom: insets.bottom + rs.size(10) }]}>
-            <View style={[styles.avatar32, { backgroundColor: myAvatarColor }]}>
-              <Text style={styles.avatar32Text}>{myInitial}</Text>
-            </View>
-            <Pressable
-              style={styles.inputPressable}
-              onPress={handleInputPress}
-              accessibilityRole="button"
-              accessibilityLabel="Open comment composer"
-              accessibilityHint={
-                hasActivePosition ? 'Post a comment on this market' : 'Requires an active bet on this market'
+        {isDrama ? (
+          <View pointerEvents="auto" style={styles.dramaOverlay}>
+            <DramaMode
+              active
+              secondsLeft={secondsLeft}
+              glowColor={dramaGlow}
+              audioRoomSlot={
+                isRoomActive ? (
+                  <LiveAudioRoom
+                    active
+                    listenerCount={liveListenerCount}
+                    speakers={liveSpeakers}
+                    tint={dramaGlow}
+                  />
+                ) : null
               }
-            >
-              <Text style={styles.inputPlaceholder}>
-                {hasActivePosition ? 'Drop your take...' : 'Stake first to join the gist'}
-              </Text>
-            </Pressable>
+            />
+          </View>
+        ) : null}
+
+        {isOpen ? (
+          <View style={{ paddingBottom: insets.bottom }}>
+            {/* BACKEND.md §10 — emoji confetti. Inbound events fire via
+                useMarketStream onReaction; outbound goes through sendReaction. */}
+            <ReactionConfetti
+              ref={confettiRef}
+              tint={myOutcomeColor}
+              onUserReact={(e) => sendReaction(e as never)}
+            />
+            <CommentComposer
+              avatarColor={myAvatarColor}
+              avatarInitial={myInitial}
+              outcomeLabel={myOutcomeLabel}
+              outcomeColor={myOutcomeColor}
+              isSubmitting={
+                activeTab === 'camp' && lockedOutcomeId
+                  ? sendCampChatMutation.isPending
+                  : createCommentMutation.isPending
+              }
+              onSubmit={handleSubmitComment}
+              disabledReason={
+                composerEnabled ? null : 'Stake first to join the gist'
+              }
+            />
           </View>
         ) : (
           <View style={[styles.closedFootnote, { paddingBottom: insets.bottom + rs.size(14) }]}>
@@ -448,15 +711,22 @@ function MarketDetailScreen() {
         onClose={() => setBetSheetOpen(false)}
       />
 
-      <CommentComposerSheet
-        visible={composerOpen}
-        avatarColor={myAvatarColor}
-        avatarInitial={myInitial}
-        outcomeLabel={lockedOutcome?.label ?? null}
-        outcomeColor={lockedOutcomeIndex >= 0 ? resolveOutcomeColor(lockedOutcomeIndex) : Colors.brand}
-        isSubmitting={createCommentMutation.isPending}
-        onSubmit={handleSubmitComment}
-        onClose={() => setComposerOpen(false)}
+      <SheetBase visible={!!rosterSide} onClose={() => setRosterSide(null)}>
+        {rosterOutcome ? (
+          <CampRoster
+            campLabel={shortTag(rosterOutcome.label)}
+            campColor={
+              rosterSide === 'leading' ? binaryColors[0] : binaryColors[1]
+            }
+            members={rosterMembers}
+          />
+        ) : null}
+      </SheetBase>
+
+      <Resolution
+        visible={showResolution}
+        variant={resolutionVariant}
+        onDismiss={() => setResolutionDismissed(true)}
       />
 
       <LockedNoticeSheet
@@ -465,8 +735,16 @@ function MarketDetailScreen() {
         lockedOutcomeColor={lockedOutcomeIndex >= 0 ? resolveOutcomeColor(lockedOutcomeIndex) : Colors.brand}
         lockedStakeKobo={lockedOutcomeId ? myStakeByOutcomeId.get(lockedOutcomeId) ?? null : null}
         attemptedOutcomeLabel={attemptedLabel}
+        attemptedOutcomeColor={attemptedColor}
+        canSwitch={!!attemptedOutcomeId && !!lockedOutcomeId && isOpen}
+        isSwitching={switchMutation.isSwitching}
+        switchFeeLabel={switchFeeLabel}
+        onSwitchToAttempted={handleSwitchToAttempted}
         onAddToLocked={handleAddToLocked}
-        onClose={() => setLockedNoticeOpen(false)}
+        onClose={() => {
+          setLockedNoticeOpen(false);
+          setAttemptedOutcomeId(null);
+        }}
       />
     </SafeAreaView>
   );
@@ -495,6 +773,15 @@ type MarketBodyProps = {
   renderComment: ({ item }: { item: Comment }) => React.ReactElement;
   myStakeByOutcomeId: Map<string, string>;
   lockedOutcomeId: string | null;
+  isDrama: boolean;
+  dramaSecondsLeft: number;
+  activeTab: GistTab;
+  onChangeTab: (t: GistTab) => void;
+  hasStance: boolean;
+  myCampLabel: string | null;
+  myCampColor: string;
+  onOpenRoster: (side: 'leading' | 'trailing') => void;
+  activityEvents: import('@/features/markets/api/activity-api').ActivityEvent[];
 };
 
 function MarketBody({
@@ -519,8 +806,17 @@ function MarketBody({
   renderComment,
   myStakeByOutcomeId,
   lockedOutcomeId,
+  isDrama: _isDrama,
+  dramaSecondsLeft: _dramaSecondsLeft,
+  activeTab,
+  onChangeTab,
+  hasStance,
+  myCampLabel,
+  myCampColor,
+  onOpenRoster,
+  activityEvents,
 }: MarketBodyProps) {
-  const resolvedWinnerId: string | null = null;
+  const resolvedWinnerId: string | null = market.resolvedOutcomeId ?? null;
 
   const leadingIndex = useMemo(() => {
     if (outcomes.length === 0) return 0;
@@ -563,17 +859,135 @@ function MarketBody({
   const yesIsMine = yes ? !!myStakeByOutcomeId.get(yes.id) : false;
   const noIsMine = no ? !!myStakeByOutcomeId.get(no.id) : false;
 
+  // Ripple state — detect a change in `myStakeByOutcomeId` (a stake landed),
+  // bump the trigger, and remember which side it hit.
+  const [rippleTrigger, setRippleTrigger] = useState(0);
+  const [rippleSide, setRippleSide] = useState<'leading' | 'trailing' | null>(null);
+  const prevStakesRef = useRef<Map<string, string>>(myStakeByOutcomeId);
+  useEffect(() => {
+    const prev = prevStakesRef.current;
+    let changedOutcomeId: string | null = null;
+    for (const [k, v] of myStakeByOutcomeId.entries()) {
+      if (prev.get(k) !== v) {
+        changedOutcomeId = k;
+        break;
+      }
+    }
+    prevStakesRef.current = myStakeByOutcomeId;
+    if (!changedOutcomeId) return;
+    setRippleSide(changedOutcomeId === leadingOutcome?.id ? 'leading' : 'trailing');
+    setRippleTrigger((n) => n + 1);
+  }, [myStakeByOutcomeId, leadingOutcome?.id]);
+
+  // BACKEND.md §8 — real activity tape. Stake + stance_change events are the
+  // only ones we surface in the ticker (milestone + resolution render
+  // elsewhere). New events arrive via SSE and are spliced by useMarketStream.
+  const activityEntries: ActivityEntry[] = useMemo(() => {
+    const out: ActivityEntry[] = [];
+    for (let i = 0; i < activityEvents.length && out.length < 12; i++) {
+      const evt = activityEvents[i];
+      if (evt.type === 'stake') {
+        const idx = outcomes.findIndex((x) => x.id === evt.outcomeId);
+        if (idx < 0) continue;
+        const label = evt.outcomeLabel ?? outcomes[idx]?.label ?? '';
+        if (!label) continue;
+        out.push({
+          id: evt.id ?? `${evt.createdAt}-${evt.userId}-stake`,
+          who: evt.displayName ?? 'Anonymous',
+          color: resolveOutcomeColor(idx),
+          amount: `₦${formatPoolKobo(evt.stakeKobo)}`,
+          side: label.toUpperCase(),
+          ago: timeAgo(evt.createdAt),
+        });
+      }
+      // stance_change events intentionally suppressed — the switch-camp
+      // feature was removed (one side per market, no hedging). Old events
+      // may still arrive from the server; we ignore them in the tape and
+      // in the dramatic defection card list below.
+    }
+    return out;
+  }, [activityEvents, outcomes, resolveOutcomeColor]);
+
+  // BACKEND.md §7 — render the most recent 3 defection events as a dramatic
+  // gradient card before the comments list. Falls back gracefully when an
+  // outcome id is no longer in the market (shouldn't happen post-resolution).
+  const stanceChanges = useMemo(() => {
+    type Entry = {
+      id: string;
+      who: string;
+      fromLabel: string;
+      toLabel: string;
+      fromColor: string;
+      toColor: string;
+      ago: string;
+    };
+    // Switch-camp / defection cards are disabled — feature removed
+    // (one side per market). Early-return an empty list so the JSX
+    // call sites and types stay identical and we don't ripple changes.
+    const ENABLED = false;
+    if (!ENABLED) return [] as Entry[];
+    const out: Entry[] = [];
+    for (let i = 0; i < activityEvents.length && out.length < 3; i++) {
+      const evt = activityEvents[i];
+      if (evt.type !== 'stance_change') continue;
+      const fromIdx = outcomes.findIndex((o) => o.id === evt.fromOutcomeId);
+      const toIdx = outcomes.findIndex((o) => o.id === evt.toOutcomeId);
+      const fromLabel =
+        evt.fromOutcomeLabel ??
+        evt.fromLabel ??
+        (fromIdx >= 0 ? outcomes[fromIdx]?.label : undefined) ??
+        '';
+      const toLabel =
+        evt.toOutcomeLabel ??
+        evt.toLabel ??
+        (toIdx >= 0 ? outcomes[toIdx]?.label : undefined) ??
+        '';
+      if (!fromLabel || !toLabel) continue;
+      out.push({
+        id: evt.id ?? `${evt.createdAt}-${evt.userId}-switch-card`,
+        who: evt.displayName ?? 'Someone',
+        fromLabel,
+        toLabel,
+        fromColor: fromIdx >= 0 ? resolveOutcomeColor(fromIdx) : Colors.text.tertiary,
+        toColor: toIdx >= 0 ? resolveOutcomeColor(toIdx) : Colors.brand,
+        ago: timeAgo(evt.createdAt),
+      });
+    }
+    return out;
+  }, [activityEvents, outcomes, resolveOutcomeColor]);
+
+  const campStateFor = (o: DetailOutcome): CampPanelState => {
+    if (isResolved && resolvedWinnerId) {
+      return o.id === resolvedWinnerId ? 'won' : 'lost';
+    }
+    if (isLocked || isResolved || isClosed) return 'frozen';
+    if (lockedOutcomeId && lockedOutcomeId !== o.id) return 'locked';
+    if (myStakeByOutcomeId.get(o.id)) return 'selected';
+    return 'idle';
+  };
+
+  const synthAvatars = (id: string, n: number) => {
+    const inits = ['A', 'C', 'I', 'O', 'S', 'M', 'D'];
+    const arr = [];
+    for (let i = 0; i < Math.min(4, Math.max(0, n)); i++) {
+      arr.push({ id: `${id}-a-${i}`, initial: inits[i % inits.length] });
+    }
+    return arr;
+  };
+
   const Header = (
     <View>
       <View style={styles.heroBlock}>
         <View style={styles.heroRow}>
           <View style={styles.heroTextWrap}>
-            <Text style={styles.question}>{market.question}</Text>
             {market.description ? (
-              <Text style={styles.heroSubtext} numberOfLines={2}>
-                {market.description}
-              </Text>
-            ) : null}
+              <>
+                <Text style={styles.heroLead}>{market.description}</Text>
+                <Text style={styles.heroQuestion}>{market.question}</Text>
+              </>
+            ) : (
+              <Text style={styles.heroLead}>{market.question}</Text>
+            )}
           </View>
           {market.imageUrl ? (
             <View style={styles.thumbWrap}>
@@ -598,46 +1012,89 @@ function MarketBody({
             poolExists={poolExists}
             selectedSide={selectedSide}
             frozen={isClosed}
+            rippleTrigger={rippleTrigger}
+            rippleSide={rippleSide}
           />
         </View>
       </View>
 
-      <View style={styles.decisionStage}>
-        {isBinary && yes && no ? (
-          <View style={styles.binaryRow}>
-            <View ref={yesRef} collapsable={false} style={styles.panelHost}>
-              <SidePanel
-                side={shortTag(yes.label) === 'YES' || shortTag(yes.label) === 'NO' ? (shortTag(yes.label) as 'YES' | 'NO') : 'YES'}
-                label={yes.label}
-                percent={yes.sharePercent}
-                multiplier={yes.multiplier}
-                color={binaryColors[0]}
-                state={panelStateFor(yes)}
-                isMine={yesIsMine}
-                poolExists={poolExists}
-                isLeading={leadingIndex === 0 && poolExists}
-                ctaLabel={yesIsMine ? 'Add to stake' : 'Stake'}
-                onPress={() => onPressYes(yes, 0)}
-                enterDelay={60}
-              />
+      <ErrorBoundary label="MyStakeBanner">
+        {lockedOutcomeId ? (() => {
+          const myIdx = outcomes.findIndex((o) => o.id === lockedOutcomeId);
+          if (myIdx < 0) return null;
+          const myOutcome = outcomes[myIdx];
+          const myColor = resolveOutcomeColor(myIdx);
+          const myStake = myStakeByOutcomeId.get(lockedOutcomeId) ?? null;
+          return (
+            <View style={styles.myStakeBannerWrap}>
+              <View
+                style={[
+                  styles.myStakeBanner,
+                  { backgroundColor: `${myColor}14`, borderColor: `${myColor}40` },
+                ]}
+              >
+                <View style={[styles.myStakeDot, { backgroundColor: myColor }]} />
+                <View style={styles.myStakeTextWrap}>
+                  <Text style={styles.myStakeLabel}>YOUR POSITION</Text>
+                  <Text style={styles.myStakeValue} numberOfLines={1}>
+                    Staked{' '}
+                    <Text style={[styles.myStakeStrong, { color: myColor }]}>
+                      {shortTag(myOutcome?.label ?? '')}
+                    </Text>
+                    {myStake ? (
+                      <Text style={styles.myStakeValue}>
+                        {' · '}
+                        <Text style={styles.myStakeStrong}>{formatPoolKobo(myStake)}</Text>
+                      </Text>
+                    ) : null}
+                  </Text>
+                </View>
+              </View>
             </View>
-            <View ref={noRef} collapsable={false} style={styles.panelHost}>
-              <SidePanel
-                side={shortTag(no.label) === 'YES' || shortTag(no.label) === 'NO' ? (shortTag(no.label) as 'YES' | 'NO') : 'NO'}
-                label={no.label}
-                percent={no.sharePercent}
-                multiplier={no.multiplier}
-                color={binaryColors[1]}
-                state={panelStateFor(no)}
-                isMine={noIsMine}
-                poolExists={poolExists}
-                isLeading={leadingIndex === 1 && poolExists}
-                ctaLabel={noIsMine ? 'Add to stake' : 'Stake'}
-                onPress={() => onPressNo(no, 1)}
-                enterDelay={140}
-              />
-            </View>
+          );
+        })() : null}
+      </ErrorBoundary>
+
+      <ErrorBoundary label="ActivityTape">
+        {activityEntries.length > 0 ? (
+          <View style={styles.tapeWrap}>
+            <ActivityTape entries={activityEntries} />
           </View>
+        ) : null}
+      </ErrorBoundary>
+
+      <View style={isBinary ? styles.decisionStageBinary : styles.decisionStage}>
+        {isBinary && yes && no ? (
+          <CampSplitHeader
+            leadingRef={yesRef}
+            trailingRef={noRef}
+            leading={{
+              label: shortTag(yes.label),
+              longLabel: yes.label,
+              multiplier: yes.multiplier,
+              bettorCount: yes.bettorCount,
+              totalStakedKobo: yes.totalPoolKobo,
+              sharePercent: yes.sharePercent,
+              color: binaryColors[0],
+              state: campStateFor(yes),
+              avatars: synthAvatars(yes.id, yes.bettorCount),
+              onPress: () => onPressYes(yes, 0),
+              onLongPress: () => onOpenRoster('leading'),
+            }}
+            trailing={{
+              label: shortTag(no.label),
+              longLabel: no.label,
+              multiplier: no.multiplier,
+              bettorCount: no.bettorCount,
+              totalStakedKobo: no.totalPoolKobo,
+              sharePercent: no.sharePercent,
+              color: binaryColors[1],
+              state: campStateFor(no),
+              avatars: synthAvatars(no.id, no.bettorCount),
+              onPress: () => onPressNo(no, 1),
+              onLongPress: () => onOpenRoster('trailing'),
+            }}
+          />
         ) : (
           <View style={styles.naryStack}>
             {outcomes.map((o, i) => (
@@ -670,6 +1127,7 @@ function MarketBody({
           totalPoolKobo={market.totalPoolKobo}
           bettorCount={market.bettorCount}
           minStakeKobo={market.minStakeKobo}
+          lateFeePoolKobo={market.lateFeePoolKobo}
         />
       </View>
 
@@ -678,6 +1136,37 @@ function MarketBody({
         <Text style={styles.crowdLabel}>THE GIST</Text>
         <View style={styles.crowdLine} />
       </View>
+
+      <View style={styles.gistWrap}>
+        <Gist
+          activeTab={activeTab}
+          onChangeTab={onChangeTab}
+          hasStance={hasStance}
+          campLabel={myCampLabel}
+          campColor={myCampColor}
+        />
+      </View>
+
+      {/* BACKEND.md §7 — surface the most recent defections as their own
+          dramatic card before the comments list, capped at 3. */}
+      <ErrorBoundary label="StanceChanges">
+        {stanceChanges.length > 0 ? (
+          <View>
+            {stanceChanges.map((s) => (
+              <ErrorBoundary key={s.id} label={`StanceChangeEvent:${s.id}`}>
+                <StanceChangeEvent
+                  who={s.who}
+                  fromLabel={s.fromLabel}
+                  toLabel={s.toLabel}
+                  fromColor={s.fromColor}
+                  toColor={s.toColor}
+                  ago={s.ago}
+                />
+              </ErrorBoundary>
+            ))}
+          </View>
+        ) : null}
+      </ErrorBoundary>
 
       {commentsLoading ? (
         <View style={styles.commentSkeletons}>
@@ -755,19 +1244,21 @@ const styles = StyleSheet.create({
     alignItems: 'flex-start',
   },
   heroTextWrap: { flex: 1 },
-  question: {
+  heroLead: {
     fontFamily: Fonts.bold,
-    fontSize: rs.font(24),
-    lineHeight: rs.font(30),
+    fontSize: rs.font(22),
+    lineHeight: rs.font(29),
     color: Colors.text.primary,
     letterSpacing: -0.3,
   },
-  heroSubtext: {
-    marginTop: rs.size(8),
-    fontFamily: Fonts.regular,
+  heroQuestion: {
+    marginTop: rs.size(10),
+    fontFamily: Fonts.medium,
     fontSize: rs.font(13),
-    lineHeight: rs.font(19),
-    color: Colors.text.secondary,
+    lineHeight: rs.font(18),
+    color: Colors.text.tertiary,
+    letterSpacing: 0.2,
+    textTransform: 'uppercase',
   },
   thumbWrap: {
     width: rs.size(64),
@@ -785,6 +1276,50 @@ const styles = StyleSheet.create({
   decisionStage: {
     marginTop: rs.size(24),
     paddingHorizontal: rs.size(20),
+  },
+  decisionStageBinary: {
+    marginTop: rs.size(20),
+  },
+  tapeWrap: {
+    marginTop: rs.size(16),
+  },
+  myStakeBannerWrap: {
+    marginTop: rs.size(16),
+    paddingHorizontal: rs.size(20),
+  },
+  myStakeBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: rs.size(12),
+    paddingHorizontal: rs.size(14),
+    paddingVertical: rs.size(12),
+    borderRadius: rs.size(14),
+    borderWidth: 1,
+  },
+  myStakeDot: {
+    width: rs.size(8),
+    height: rs.size(8),
+    borderRadius: rs.size(4),
+  },
+  myStakeTextWrap: { flex: 1 },
+  myStakeLabel: {
+    fontFamily: Fonts.bold,
+    fontSize: rs.font(10),
+    color: Colors.text.tertiary,
+    letterSpacing: 1.2,
+  },
+  myStakeValue: {
+    marginTop: rs.size(2),
+    fontFamily: Fonts.regular,
+    fontSize: rs.font(13),
+    color: Colors.text.secondary,
+  },
+  myStakeStrong: {
+    fontFamily: Fonts.bold,
+    color: Colors.text.primary,
+  },
+  dramaOverlay: {
+    ...StyleSheet.absoluteFillObject,
   },
   binaryRow: {
     flexDirection: 'row',
@@ -808,6 +1343,7 @@ const styles = StyleSheet.create({
     gap: rs.size(12),
   },
   crowdLine: { flex: 1, height: 1, backgroundColor: Colors.border.hairline },
+  gistWrap: { marginTop: rs.size(14) },
   crowdLabel: {
     fontFamily: Fonts.bold,
     fontSize: rs.font(12),

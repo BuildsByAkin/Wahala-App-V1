@@ -1,5 +1,5 @@
 import React from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text } from 'react-native';
 
 import { Colors } from '@/constants/colors';
 import { Fonts } from '@/constants/fonts';
@@ -12,6 +12,7 @@ type Props = {
 
 type State = {
   error: Error | null;
+  componentStack?: string | null;
 };
 
 export class ErrorBoundary extends React.Component<Props, State> {
@@ -23,28 +24,37 @@ export class ErrorBoundary extends React.Component<Props, State> {
 
   componentDidCatch(error: Error, info: { componentStack?: string | null }) {
     const label = this.props.label ?? 'ErrorBoundary';
-    console.log(`[${label}] caught error:`, error?.message);
-    console.log(`[${label}] stack:`, error?.stack);
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    console.log(`[${label}] caught error: ${error?.name ?? 'Error'}: ${error?.message}`);
+    if (error?.stack) console.log(`[${label}] stack:\n` + error.stack);
     if (info?.componentStack) {
-      console.log(`[${label}] componentStack:`, info.componentStack);
+      console.log(`[${label}] componentStack:` + info.componentStack);
     }
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    this.setState({ componentStack: info?.componentStack ?? null });
   }
 
   reset = () => {
-    this.setState({ error: null });
+    this.setState({ error: null, componentStack: null });
   };
 
   render() {
     if (this.state.error) {
+      const label = this.props.label ?? 'ErrorBoundary';
       return (
-        <View style={styles.wrap}>
-          <Text style={styles.title}>Something broke on this screen</Text>
-          <Text style={styles.msg} numberOfLines={6}>
+        <ScrollView style={styles.wrap} contentContainerStyle={styles.wrapContent}>
+          <Text style={styles.title}>[{label}] crashed</Text>
+          <Text style={styles.msg} selectable>
             {this.state.error.message || String(this.state.error)}
           </Text>
           {this.state.error.stack ? (
-            <Text style={styles.stack} numberOfLines={20}>
+            <Text style={styles.stack} selectable>
               {this.state.error.stack}
+            </Text>
+          ) : null}
+          {this.state.componentStack ? (
+            <Text style={styles.stack} selectable>
+              componentStack:{this.state.componentStack}
             </Text>
           ) : null}
           <Pressable
@@ -55,7 +65,7 @@ export class ErrorBoundary extends React.Component<Props, State> {
           >
             <Text style={styles.btnText}>Try again</Text>
           </Pressable>
-        </View>
+        </ScrollView>
       );
     }
     return this.props.children;
@@ -65,9 +75,12 @@ export class ErrorBoundary extends React.Component<Props, State> {
 const styles = StyleSheet.create({
   wrap: {
     flex: 1,
-    padding: rs.size(20),
     backgroundColor: Colors.surface.base,
-    justifyContent: 'center',
+  },
+  wrapContent: {
+    padding: rs.size(20),
+    paddingTop: rs.size(60),
+    paddingBottom: rs.size(60),
   },
   title: {
     fontFamily: Fonts.bold,

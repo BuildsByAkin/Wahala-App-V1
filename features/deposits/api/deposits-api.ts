@@ -43,8 +43,11 @@ export const depositsApi = {
   },
 };
 
-// Backend-enforced bounds — Stripe minimum is ₦500.
-export const DEPOSIT_MIN_KOBO = 50_000n; // ₦500
+// Backend-enforced bounds — Stripe Checkout requires the order total to
+// convert to ≥ $0.50 USD. ₦500 sits too close to that threshold once FX
+// fluctuates, so the backend rejects anything below ₦1,000 (100,000 kobo)
+// before it ever reaches Stripe.
+export const DEPOSIT_MIN_KOBO = 100_000n; // ₦1,000
 export const DEPOSIT_MAX_KOBO = 50_000_000n; // ₦500,000
 
 // A status is "terminal" if no further polling will change it.

@@ -1,81 +1,80 @@
 // app/(tabs)/index.tsx
+// Home screen — Bundle 1 composition (REDESIGN.md §4 + REDESIGN_v2.md §4.1).
+//   Persistent HeaderBar (logo + StreakFlame + balance + bell).
+//   TodaysWahalaBand (v2 daily band with countdown + camp doors).
+//   HeroPulseCard (first featured market — 250dp showpiece).
+//   Sticky CategoryFilter with ChipToggle motion.
+//   FlashList feed with CardEnter stagger (FadeInUp(220).delay(index * 30)).
+//   Pidgin funding banner + Pidgin empty state.
+//   WahalaSpinner pull-to-refresh.
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AppState,
   type AppStateStatus,
-  Pressable,
   RefreshControl,
   StyleSheet,
   Text,
   View,
 } from 'react-native';
-import Animated, {
-  Easing,
-  useAnimatedStyle,
-  useSharedValue,
-  withRepeat,
-  withTiming,
-} from 'react-native-reanimated';
+import Animated, { FadeInUp } from 'react-native-reanimated';
 import { FlashList, type ListRenderItem } from '@shopify/flash-list';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Feather } from '@expo/vector-icons';
-import * as Haptics from 'expo-haptics';
 import { useRouter } from 'expo-router';
+import { useQueryClient } from '@tanstack/react-query';
+
+import { Colors } from '@/constants/colors';
 import { Fonts } from '@/constants/fonts';
 import { rs } from '@/utils/responsive';
 import { CategoryFilter } from '@/components/home/CategoryFilter';
-import { MarketCardFull } from '@/components/home/MarketCardFull';
+import { HeaderBar } from '@/components/home/HeaderBar';
+import { HeroPulseCard } from '@/components/home/HeroPulseCard';
 import { MarketCardCompact } from '@/components/home/MarketCardCompact';
-import { useQueryClient } from '@tanstack/react-query';
+import { MarketCardFull } from '@/components/home/MarketCardFull';
+import { TodaysWahalaBand } from '@/components/home/TodaysWahalaBand';
+import { PressableSpring } from '@/components/motion/PressableSpring';
+import { SkeletonShimmer } from '@/components/motion/SkeletonShimmer';
+import { WahalaSpinner } from '@/components/motion/WahalaSpinner';
 import { useAuth } from '@/features/auth';
+import { useMyBets } from '@/features/betting';
+import { useDailyWahala } from '@/features/daily-wahala';
 import { useMarkets } from '@/hooks/useMarkets';
+import { useStreak } from '@/hooks/useStreak';
+import { deriveMarketStateVariant } from '@/utils/marketStateVariant';
+import { useReducedMotion } from '@/hooks/useReducedMotion';
 import { withdrawalKeys } from '@/lib/api/query-keys';
 import { type Market, shouldRenderFullCard, uniqueCategories } from '@/utils/market';
 
-const SKELETON_HEIGHTS = [160, 120, 120];
-
-// How long to wait after mount before deciding the user has zero balance.
-// Prevents the banner flashing on cold start while /me is still in-flight.
+// Wait for `/me` to settle before deciding the wallet is truly empty so the
+// banner doesn't flash on cold start.
 const FUNDING_BANNER_DELAY_MS = 30_000;
 
-// Vertical breathing room between cards. Hoisted so React doesn't re-create
-// the component on every parent render (which would defeat FlashList's
-// separator memoisation).
 const MarketSeparator = () => <View style={styles.cardSeparator} />;
 
 function SkeletonFeed() {
-  // Reanimated v3 — drives opacity on the UI thread so a long FlashList re-render
-  // doesn't pause the skeleton pulse.
-  const opacity = useSharedValue(0.4);
-
-  useEffect(() => {
-    opacity.value = withRepeat(
-      withTiming(0.9, { duration: 700, easing: Easing.inOut(Easing.ease) }),
-      -1,
-      true
-    );
-  }, [opacity]);
-
-  const pulseStyle = useAnimatedStyle(() => ({ opacity: opacity.value }));
-
   return (
     <View style={styles.feed}>
-      {SKELETON_HEIGHTS.map((h, i) => (
-        <Animated.View
-          key={i}
-          style={[styles.skeleton, { height: rs.size(h) }, pulseStyle]}
-        />
-      ))}
+      <SkeletonShimmer height={rs.size(180)} borderRadius={rs.size(18)} />
+      <SkeletonShimmer height={rs.size(140)} borderRadius={rs.size(18)} />
+      <SkeletonShimmer height={rs.size(140)} borderRadius={rs.size(18)} />
     </View>
   );
+}
+
+interface FeedItem {
+  market: Market;
+  index: number;
+  /** When true skip the entering animation (subsequent scrolls). */
+  skipEnter: boolean;
 }
 
 export default function HomeScreen() {
   const router = useRouter();
   const queryClient = useQueryClient();
+  const reduced = useReducedMotion();
   const [activeCategory, setActiveCategory] = useState('All');
-  const { displayName, username, refreshMe, walletAvailableKobo } = useAuth();
-  const greetingName = displayName?.trim() || username || 'friend';
+  const { walletAvailableKobo, refreshMe } = useAuth();
+  const streak = useStreak();
 
   const hasBalance = useMemo(() => {
     if (!walletAvailableKobo) return false;
@@ -86,35 +85,51 @@ export default function HomeScreen() {
     }
   }, [walletAvailableKobo]);
 
-  // Funding-banner gating. Local-only state — `dismissedFundingBanner` does
-  // not persist (per spec, it should re-appear on next cold open until the
-  // user actually deposits). `fundingBannerReady` is flipped after a 30s
-  // delay so the banner doesn't flash before /me settles.
+  // Funding-banner gating.
   const [fundingBannerReady, setFundingBannerReady] = useState(false);
   const [dismissedFundingBanner, setDismissedFundingBanner] = useState(false);
 
   useEffect(() => {
-    const t = setTimeout(
-      () => setFundingBannerReady(true),
-      FUNDING_BANNER_DELAY_MS
-    );
+    const t = setTimeout(() => setFundingBannerReady(true), FUNDING_BANNER_DELAY_MS);
     return () => clearTimeout(t);
   }, []);
 
   const showFundingBanner =
-    fundingBannerReady &&
-    !dismissedFundingBanner &&
-    walletAvailableKobo === '0';
+    fundingBannerReady && !dismissedFundingBanner && walletAvailableKobo === '0';
 
   const { markets, isLoading, isError, refetch, isRefetching } = useMarkets();
+  const { bets: myBets } = useMyBets();
 
-  // Backend already returns only effectively-open markets (drafts removed,
-  // scheduled-but-past-opensAt rolled into open). This filter is a defensive
-  // belt-and-braces — accept anything the API hands us as effective `open`.
   const openMarkets = useMemo(
     () => markets.filter((m) => m.status === 'open'),
     [markets]
   );
+
+  // First-featured market is the Hero. Today's Wahala uses the same market
+  // as a stand-in until a curated daily endpoint lands.
+  const heroMarket = useMemo(
+    () => openMarkets.find((m) => m.featured) ?? openMarkets[0] ?? null,
+    [openMarkets]
+  );
+
+  // BACKEND.md §4 — server-curated daily. Falls back to the most-recent
+  // featured market when /daily-wahala 404s (cold launch, no daily set).
+  const { data: dailyWahala } = useDailyWahala();
+
+  const todaysWahalaMarket = useMemo(() => {
+    if (dailyWahala?.market) return dailyWahala.market;
+    const featured = markets.filter((m) => m.featured);
+    if (featured.length === 0) return heroMarket;
+    // Prefer open → resolved (post-verdict) → newest closesAt.
+    const sorted = [...featured].sort((a, b) => {
+      const rank = (s: Market['status']) =>
+        s === 'open' ? 0 : s === 'resolved' ? 1 : s === 'locked' ? 2 : 3;
+      const rdiff = rank(a.status) - rank(b.status);
+      if (rdiff !== 0) return rdiff;
+      return new Date(b.closesAt).getTime() - new Date(a.closesAt).getTime();
+    });
+    return sorted[0] ?? heroMarket;
+  }, [dailyWahala?.market, markets, heroMarket]);
 
   const categories = useMemo(
     () => (openMarkets.length > 0 ? uniqueCategories(openMarkets) : []),
@@ -122,144 +137,163 @@ export default function HomeScreen() {
   );
 
   const visibleMarkets = useMemo(() => {
-    if (activeCategory === 'All') return openMarkets;
-    return openMarkets.filter((m) => m.category === activeCategory);
-  }, [openMarkets, activeCategory]);
+    // Hero is rendered once at the top; exclude it from the rest of the feed
+    // to avoid duplicating it.
+    const base = activeCategory === 'All'
+      ? openMarkets
+      : openMarkets.filter((m) => m.category === activeCategory);
+    if (!heroMarket) return base;
+    return base.filter((m) => m.id !== heroMarket.id);
+  }, [openMarkets, activeCategory, heroMarket]);
+
+  // Mark whether the first paint has happened. After that, FlashList items
+  // entering the viewport via scroll should not stagger — they should appear
+  // *as scrolled to*, not delayed.
+  const mountedRef = useRef(false);
+  useEffect(() => {
+    const t = setTimeout(() => {
+      mountedRef.current = true;
+    }, 800);
+    return () => clearTimeout(t);
+  }, []);
 
   // Silent refresh of profile + wallet + withdrawal history whenever the app
-  // returns to the foreground. Fire-and-forget — never block the UI on it.
-  // Withdrawals are processed manually within a 4-hour SLA, so when the user
-  // reopens the app after an admin marks a txn as `completed`, the history
-  // badge should flip from "Pending" to "Sent" without any user action.
+  // returns to the foreground.
   const appStateRef = useRef<AppStateStatus>(AppState.currentState);
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (nextState) => {
       const prev = appStateRef.current;
       appStateRef.current = nextState;
-      if (
-        (prev === 'background' || prev === 'inactive') &&
-        nextState === 'active'
-      ) {
+      if ((prev === 'background' || prev === 'inactive') && nextState === 'active') {
         void refreshMe();
         queryClient.invalidateQueries({ queryKey: withdrawalKeys.list() });
       }
     });
-    return () => {
-      subscription.remove();
-    };
+    return () => subscription.remove();
   }, [refreshMe, queryClient]);
 
-  // Reset filter if its category disappears from the dataset.
   useEffect(() => {
     if (activeCategory !== 'All' && !categories.includes(activeCategory)) {
       setActiveCategory('All');
     }
   }, [categories, activeCategory]);
 
-  // FlashList performs best when item dimensions are roughly known and the
-  // renderer function is stable. We use the `Market.id` as the stable key and
-  // expose `shouldRenderFullCard` as a discriminator so FlashList can recycle
-  // separately within each visual type.
-  const renderMarket: ListRenderItem<Market> = useCallback(
+  const feedData: FeedItem[] = useMemo(
+    () =>
+      visibleMarkets.map((m, i) => ({
+        market: m,
+        index: i,
+        skipEnter: mountedRef.current,
+      })),
+    [visibleMarkets]
+  );
+
+  const goToMarket = useCallback(
+    (slug: string) => router.push(`/market/${slug}` as never),
+    [router]
+  );
+
+  const renderMarket: ListRenderItem<FeedItem> = useCallback(
     ({ item }) => {
       const ctaVariant: 'stake' | 'view' =
-        hasBalance && item.status === 'open' ? 'stake' : 'view';
+        hasBalance && item.market.status === 'open' ? 'stake' : 'view';
+      const isFull = shouldRenderFullCard(item.market);
+      const enter =
+        item.skipEnter || reduced
+          ? undefined
+          : FadeInUp.duration(220).delay(Math.min(item.index, 6) * 30);
+      const variant = deriveMarketStateVariant(item.market, { myBets });
+      const Card = isFull ? (
+        <MarketCardFull
+          market={item.market}
+          ctaVariant={ctaVariant}
+          stateVariant={variant}
+          onPressLeader={() => goToMarket(item.market.slug)}
+          onPressTrailer={() => goToMarket(item.market.slug)}
+        />
+      ) : (
+        <MarketCardCompact
+          market={item.market}
+          ctaVariant={ctaVariant}
+          stateVariant={variant}
+          onPressStake={() => goToMarket(item.market.slug)}
+        />
+      );
       return (
-        <Pressable
-          style={({ pressed }) => [styles.cardWrapper, pressed && styles.cardPressed]}
-          onPress={() => router.push(`/market/${item.slug}` as never)}
-          accessibilityRole="button"
-          accessibilityLabel={`Open market: ${item.question}`}
-        >
-          {shouldRenderFullCard(item) ? (
-            <MarketCardFull market={item} ctaVariant={ctaVariant} />
-          ) : (
-            <MarketCardCompact market={item} ctaVariant={ctaVariant} />
-          )}
-        </Pressable>
+        <Animated.View style={styles.cardWrapper} entering={enter}>
+          <PressableSpring
+            variant="ghost"
+            haptic="tap"
+            onPress={() => goToMarket(item.market.slug)}
+            accessibilityRole="button"
+            accessibilityLabel={`Open market: ${item.market.question}`}
+          >
+            {Card}
+          </PressableSpring>
+        </Animated.View>
       );
     },
-    [router, hasBalance]
+    [goToMarket, hasBalance, reduced, myBets]
   );
 
   const ListHeader = (
     <View>
-      <View style={styles.topBar}>
-        <Text style={styles.logo}>Wahala</Text>
-        <View style={styles.topIcons}>
-          <Pressable style={styles.iconButton}>
-            <Feather name="bell" size={rs.font(22)} color="#FFFFFF" />
-            <View style={styles.notificationDot} />
-          </Pressable>
-        </View>
-      </View>
+      <HeaderBar
+        walletAvailableKobo={walletAvailableKobo}
+        streakCount={streak.count}
+        notificationCount={0}
+      />
 
-      <View style={styles.greetingRow}>
-        <Text style={styles.greetingText} numberOfLines={1}>
-          <Text style={styles.greetingRegular}>Wetin dey shake, </Text>
-          <Text style={styles.greetingBold}>{greetingName}</Text>
-        </Text>
-      </View>
+      {todaysWahalaMarket ? <TodaysWahalaBand market={todaysWahalaMarket} /> : null}
+
+      {heroMarket ? (
+        <Animated.View
+          style={styles.heroWrap}
+          entering={reduced ? undefined : FadeInUp.duration(260)}
+        >
+          <HeroPulseCard market={heroMarket} />
+        </Animated.View>
+      ) : null}
 
       {showFundingBanner ? (
-        <Pressable
-          onPress={() => {
-            void Haptics.selectionAsync().catch(() => {});
-            router.push('/wallet/deposit' as never);
-          }}
-          style={({ pressed }) => [
-            styles.fundingBanner,
-            pressed && styles.fundingBannerPressed,
-          ]}
+        <PressableSpring
+          variant="ghost"
+          haptic="soft"
+          onPress={() => router.push('/wallet/deposit' as never)}
+          style={styles.fundingBanner}
           accessibilityRole="button"
-          accessibilityLabel="Fund your wallet to start betting"
+          accessibilityLabel="Fund your wallet to start staking"
           accessibilityHint="Opens the deposit screen"
         >
           <View style={styles.fundingIcon}>
             <Feather name="zap" size={rs.size(20)} color="#000000" />
           </View>
           <View style={styles.fundingCopy}>
-            <Text style={styles.fundingTitle}>
-              Fund your wallet to start betting
-            </Text>
+            <Text style={styles.fundingTitle}>Your wallet still dey empty.</Text>
             <Text style={styles.fundingBody}>
-              Deposit naira and place your first stake
+              Drop ₦1k make the gist begin.
             </Text>
           </View>
-          <Feather
-            name="chevron-right"
-            size={rs.size(18)}
-            color="#FF6500"
-          />
-          {/* Dismiss is a sibling Pressable so the parent press still routes
-              when the user taps the body; the × stops propagation locally. */}
-          <Pressable
-            onPress={(e) => {
-              e.stopPropagation();
-              void Haptics.selectionAsync().catch(() => {});
-              setDismissedFundingBanner(true);
-            }}
+          <Feather name="chevron-right" size={rs.size(18)} color={Colors.brand} />
+          <PressableSpring
+            variant="ghost"
+            haptic="tap"
+            onPress={() => setDismissedFundingBanner(true)}
             hitSlop={12}
             style={styles.fundingDismiss}
             accessibilityRole="button"
             accessibilityLabel="Dismiss funding banner"
           >
-            <Feather name="x" size={rs.size(20)} color="#555555" />
-          </Pressable>
-        </Pressable>
+            <Feather name="x" size={rs.size(18)} color={Colors.text.tertiary} />
+          </PressableSpring>
+        </PressableSpring>
       ) : null}
 
       <View style={styles.sectionHeader}>
-        <View style={styles.sectionHeaderLeft}>
-          <Text style={styles.sectionTitle}>Hot gist</Text>
-          <Text style={styles.fireEmoji}> 🔥</Text>
-        </View>
-        <Pressable style={styles.seeAllButton}>
-          <Text style={styles.seeAllText}>
-            See all {visibleMarkets.length > 0 ? `(${visibleMarkets.length}) ` : ''}
-          </Text>
-          <Text style={styles.seeAllChevron}>›</Text>
-        </Pressable>
+        <Text style={styles.sectionTitle}>Hot gist 🔥</Text>
+        {visibleMarkets.length > 0 ? (
+          <Text style={styles.sectionCount}>{visibleMarkets.length}</Text>
+        ) : null}
       </View>
 
       {categories.length > 0 && (
@@ -278,21 +312,24 @@ export default function HomeScreen() {
 
   const ListEmpty = !isLoading ? (
     <View style={styles.emptyState}>
-      <Text style={styles.emptyText}>
+      <Text style={styles.emptyTitle}>
+        {isError ? "E no work — pull down make we try again." : 'E quiet for this category…'}
+      </Text>
+      <Text style={styles.emptyBody}>
         {isError
-          ? "Couldn't load markets, pull down to retry"
-          : 'No markets right now, check back soon'}
+          ? 'Network just dey play. Try refresh.'
+          : 'Try another category, abeg.'}
       </Text>
     </View>
   ) : null;
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top']}>
       <FlashList
-        data={isLoading ? [] : visibleMarkets}
+        data={isLoading ? [] : feedData}
         renderItem={renderMarket}
-        keyExtractor={(m) => m.id}
-        getItemType={(m) => (shouldRenderFullCard(m) ? 'full' : 'compact')}
+        keyExtractor={(item) => item.market.id}
+        getItemType={(item) => (shouldRenderFullCard(item.market) ? 'full' : 'compact')}
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.contentContainer}
         ItemSeparatorComponent={MarketSeparator}
@@ -304,11 +341,16 @@ export default function HomeScreen() {
             onRefresh={() => {
               void refetch();
             }}
-            tintColor="#FF6500"
-            colors={['#FF6500']}
+            tintColor={Colors.brand}
+            colors={[Colors.brand]}
           />
         }
       />
+      {isRefetching ? (
+        <View style={styles.spinnerOverlay} pointerEvents="none">
+          <WahalaSpinner refreshing />
+        </View>
+      ) : null}
     </SafeAreaView>
   );
 }
@@ -316,106 +358,41 @@ export default function HomeScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#0A0A0A',
+    backgroundColor: Colors.surface['00'],
   },
   contentContainer: {
     paddingBottom: rs.size(100),
   },
-  topBar: {
-    height: rs.size(56),
-    paddingHorizontal: rs.size(20),
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  logo: {
-    fontFamily: Fonts.display,
-    fontSize: rs.font(26),
-    color: '#FF6500',
-  },
-  topIcons: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: rs.size(8),
-  },
-  iconButton: {
-    width: rs.size(32),
-    height: rs.size(32),
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  notificationDot: {
-    position: 'absolute',
-    top: rs.size(4),
-    right: rs.size(4),
-    width: rs.size(7),
-    height: rs.size(7),
-    borderRadius: rs.size(3.5),
-    backgroundColor: '#FF3B30',
-  },
-  greetingRow: {
-    marginTop: rs.size(4),
-    paddingHorizontal: rs.size(20),
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  greetingText: {
-    fontSize: rs.font(15),
-  },
-  greetingRegular: {
-    fontFamily: Fonts.regular,
-    color: '#AAAAAA',
-  },
-  greetingBold: {
-    fontFamily: Fonts.bold,
-    color: '#FFFFFF',
+  heroWrap: {
+    marginTop: rs.size(8),
   },
   sectionHeader: {
-    marginTop: rs.size(24),
+    marginTop: rs.size(20),
     paddingHorizontal: rs.size(20),
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-  },
-  sectionHeaderLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
   },
   sectionTitle: {
     fontFamily: Fonts.bold,
-    fontSize: rs.font(20),
-    color: '#FFFFFF',
-  },
-  fireEmoji: {
     fontSize: rs.font(18),
+    color: Colors.text.primary,
+    letterSpacing: -0.2,
   },
-  seeAllButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  seeAllText: {
-    fontFamily: Fonts.regular,
+  sectionCount: {
+    fontFamily: Fonts.medium,
     fontSize: rs.font(13),
-    color: '#555555',
-  },
-  seeAllChevron: {
-    fontFamily: Fonts.regular,
-    fontSize: rs.font(16),
-    color: '#555555',
-    marginTop: rs.size(-2),
+    color: Colors.text.tertiary,
+    fontVariant: ['tabular-nums'],
   },
   filterWrapper: {
-    marginTop: rs.size(12),
+    marginTop: rs.size(10),
   },
   feed: {
-    marginTop: rs.size(16),
+    marginTop: rs.size(12),
     paddingHorizontal: rs.size(16),
     gap: rs.size(12),
   },
-  // FlashList recycles items individually, so the old parent `gap` no longer
-  // applies. Each card carries its own horizontal inset and the separator
-  // below adds the vertical breathing room.
   cardWrapper: {
     paddingHorizontal: rs.size(16),
   },
@@ -423,50 +400,44 @@ const styles = StyleSheet.create({
     height: rs.size(12),
   },
   feedTopSpacer: {
-    height: rs.size(16),
-  },
-  cardPressed: {
-    opacity: 0.85,
-  },
-  skeleton: {
-    backgroundColor: '#1A1A1A',
-    borderRadius: rs.size(16),
+    height: rs.size(12),
   },
   emptyState: {
-    marginTop: rs.size(48),
+    marginTop: rs.size(36),
     paddingHorizontal: rs.size(24),
     alignItems: 'center',
     justifyContent: 'center',
+    gap: rs.size(6),
   },
-  emptyText: {
+  emptyTitle: {
+    fontFamily: Fonts.bold,
+    fontSize: rs.font(15),
+    color: Colors.text.primary,
+    textAlign: 'center',
+  },
+  emptyBody: {
     fontFamily: Fonts.regular,
-    fontSize: rs.font(14),
-    color: '#888888',
+    fontSize: rs.font(13),
+    color: Colors.text.secondary,
     textAlign: 'center',
   },
   fundingBanner: {
     marginHorizontal: rs.size(16),
-    marginTop: rs.size(16),
-    marginBottom: rs.size(16),
-    backgroundColor: '#111111',
+    marginTop: rs.size(14),
+    backgroundColor: Colors.surface['02'],
     borderRadius: rs.size(16),
-    padding: rs.size(16),
+    padding: rs.size(14),
     paddingRight: rs.size(40),
     borderWidth: 1,
-    // Spec'd #FF650033 — 20% alpha brand orange. Kept literal because it's
-    // a one-off accent border, not part of the semantic token system.
-    borderColor: '#FF650033',
+    borderColor: `${Colors.brand}33`,
     flexDirection: 'row',
     alignItems: 'center',
   },
-  fundingBannerPressed: {
-    opacity: 0.85,
-  },
   fundingIcon: {
-    width: rs.size(44),
-    height: rs.size(44),
-    borderRadius: rs.size(44) / 2,
-    backgroundColor: '#FF6500',
+    width: rs.size(40),
+    height: rs.size(40),
+    borderRadius: rs.size(20),
+    backgroundColor: Colors.brand,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -475,25 +446,32 @@ const styles = StyleSheet.create({
     marginLeft: rs.size(12),
   },
   fundingTitle: {
-    fontFamily: Fonts.semibold,
-    fontSize: rs.font(15),
-    color: '#FFFFFF',
+    fontFamily: Fonts.bold,
+    fontSize: rs.font(14),
+    color: Colors.text.primary,
     includeFontPadding: false,
   },
   fundingBody: {
-    marginTop: rs.size(3),
+    marginTop: rs.size(2),
     fontFamily: Fonts.regular,
-    fontSize: rs.font(13),
-    color: '#666666',
+    fontSize: rs.font(12),
+    color: Colors.text.secondary,
     includeFontPadding: false,
   },
   fundingDismiss: {
     position: 'absolute',
-    top: rs.size(8),
-    right: rs.size(8),
+    top: rs.size(6),
+    right: rs.size(6),
     width: rs.size(28),
     height: rs.size(28),
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  spinnerOverlay: {
+    position: 'absolute',
+    top: rs.size(80),
+    left: 0,
+    right: 0,
+    alignItems: 'center',
   },
 });

@@ -7,6 +7,7 @@ import { applyWallet, authKeys } from '@/features/auth';
 import { useAppDispatch } from '@/store';
 import { extractApiError } from '@/lib/api/axios';
 import { betKeys, marketKeys } from '@/lib/api/query-keys';
+import { markStanceTaken } from '@/lib/streak';
 import {
   bettingApi,
   type PlaceBetPayload,
@@ -108,6 +109,12 @@ export function usePlaceBet(opts?: { marketSlug?: string }) {
       // Snap the wallet to the server's authoritative balance immediately —
       // no need to refetch /me just for this.
       dispatch(applyWallet(result.wallet));
+
+      // Bundle 6 — Daily Wahala streak. Idempotent within the day.
+      // Skip if the server reports this was a duplicate of an earlier bet.
+      if (!result.alreadyPlaced) {
+        void markStanceTaken();
+      }
 
       // Refresh affected caches. We invalidate at the top of each namespace so
       // every paginated/filtered variant gets refreshed in one call.

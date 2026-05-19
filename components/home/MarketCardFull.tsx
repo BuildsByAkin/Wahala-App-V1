@@ -1,85 +1,184 @@
 // components/home/MarketCardFull.tsx
-import React from 'react';
+// Feed full card. Top→bottom anatomy (REDESIGN.md §5.1):
+//   1. Meta strip — category accent bar + label, closes-in.
+//   2. Question + bleed thumb (image flush to right with rounded radius).
+//   3. Combined two-segment rail with embedded percentages, drawn over a
+//      24-tick sparkline at 30% opacity.
+//   4. Avatar stack + crumbs (pool, comments).
+//   5. Dual inline stake CTAs (left = leader, right = trailer) — opens detail.
+import React, { useMemo } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { Image } from 'expo-image';
 import { Feather } from '@expo/vector-icons';
+
+import { Colors, getCategoryAccent } from '@/constants/colors';
 import { Fonts } from '@/constants/fonts';
 import { rs } from '@/utils/responsive';
 import {
   type Market,
   type Outcome,
+  type RecentStaker,
   formatClosesIn,
   formatPoolKobo,
-  getCardSchemeColors,
   getOutcomeMultiplier,
   getOutcomePercent,
   hasPool,
   isClosingSoon,
 } from '@/utils/market';
 
+import { CombinedRail } from '@/components/home/CombinedRail';
+import { Sparkline } from '@/components/home/Sparkline';
+import { AvatarStack, type AvatarStackEntry } from '@/components/home/AvatarStack';
+import { PressableSpring } from '@/components/motion/PressableSpring';
+import { StateVariantChip, type StateVariant } from '@/components/home/StateVariantChip';
+
 export type MarketCardCtaVariant = 'stake' | 'view';
 
 interface MarketCardFullProps {
   market: Market;
   ctaVariant?: MarketCardCtaVariant;
+  onPressLeader?: () => void;
+  onPressTrailer?: () => void;
+  /** Lifecycle / footprint chip (just-staked, closing-soon, …). */
+  stateVariant?: StateVariant | null;
 }
 
-type RankedOutcome = {
-  outcome: Outcome;
-  stake: bigint;
-};
+function rankOutcomes(outcomes: Outcome[]): Outcome[] {
+  return [...outcomes].sort((a, b) => {
+    try {
+      return BigInt(b.totalStakedKobo) > BigInt(a.totalStakedKobo) ? 1 : -1;
+    } catch {
+      return 0;
+    }
+  });
+}
 
-function rankOutcomes(outcomes: Outcome[]): RankedOutcome[] {
-  return outcomes
-    .map((outcome) => {
-      let stake = 0n;
-      try {
-        stake = BigInt(outcome.totalStakedKobo);
-      } catch {
-        stake = 0n;
-      }
-      return { outcome, stake };
-    })
-    .sort((a, b) => (b.stake > a.stake ? 1 : b.stake < a.stake ? -1 : 0));
+function deriveStackers(market: Market): AvatarStackEntry[] {
+  // Prefer server-provided recent stakers (BACKEND.md §2). Fall back to a
+  // deterministic synthesized stack when the field is absent so older
+  // backends still render.
+  const real = market.recentStakers;
+  if (real && real.length > 0) {
+    return real.map<AvatarStackEntry>((s: RecentStaker) => ({
+      id: s.userId,
+      initial: (s.displayName?.trim() || s.username || '·').charAt(0).toUpperCase(),
+    }));
+  }
+  const seed = market.id;
+  const initials = ['A', 'C', 'I', 'O', 'S', 'M', 'D', 'F'];
+  const count = Math.min(5, Math.max(2, market.bettorCount));
+  const entries: AvatarStackEntry[] = [];
+  for (let i = 0; i < count; i++) {
+    entries.push({ id: `${seed}-${i}`, initial: initials[i % initials.length] });
+  }
+  return entries;
 }
 
 export const MarketCardFull: React.FC<MarketCardFullProps> = ({
   market,
   ctaVariant = 'view',
+  onPressLeader,
+  onPressTrailer,
+  stateVariant,
 }) => {
   const poolExists = hasPool(market.totalPoolKobo);
   const closesLabel = formatClosesIn(market.closesAt);
   const isSoon = isClosingSoon(market.closesAt);
-  const isBinary = market.outcomes.length <= 2;
-  const scheme = getCardSchemeColors(market.id);
+  // Prefer the server-denormalized categoryMeta when present (BACKEND.md §1).
+  // Falls back to the local palette so an older backend still renders branded.
+  const accent =
+    market.categoryMeta?.primaryColor ?? getCategoryAccent(market.category).primary;
+  const trailerAccent = Colors.category.gist.primary;
+  const resolved = market.status === 'resolved' || market.status === 'cancelled' || market.status === 'voided';
 
-  const ranked = rankOutcomes(market.outcomes);
-  const visible = ranked.slice(0, 2);
+  const ranked = useMemo(() => rankOutcomes(market.outcomes), [market.outcomes]);
+  const leader = ranked[0];
+  const trailer = ranked[1];
   const hiddenCount = Math.max(0, ranked.length - 2);
 
-  const leader = visible[0];
-  const trailer = visible[1];
-  const equalSplit = !poolExists || !leader || !trailer || leader.stake === trailer.stake;
+  const leaderPct = leader && poolExists
+    ? getOutcomePercent(leader.totalStakedKobo, market.totalPoolKobo) ?? 50
+    : 50;
+  const trailerPct = 100 - leaderPct;
+
+  const leaderMult = leader && poolExists
+    ? getOutcomeMultiplier(leader.totalStakedKobo, market.totalPoolKobo)
+    : null;
+  const trailerMult = trailer && poolExists
+    ? getOutcomeMultiplier(trailer.totalStakedKobo, market.totalPoolKobo)
+    : null;
+
+  const sparkSeed = `${market.id}-${leaderPct}`;
 
   return (
-    <View style={styles.container}>
-      {/* 1. Meta row — category + closes-in */}
+    <View
+      style={[
+        styles.container,
+        resolved && styles.containerResolved,
+        isSoon && !resolved && { borderColor: `${accent}88` },
+      ]}
+    >
+      {/* Category accent bar */}
+      <View style={[styles.accentBar, { backgroundColor: accent }]} />
+
+      {/* 1. Meta strip */}
       <View style={styles.metaRow}>
         <View style={styles.metaLeft}>
-          <Text style={styles.category}>{market.category.toUpperCase()}</Text>
+          <Text style={[styles.category, { color: accent }]}>
+            {market.category.toUpperCase()}
+          </Text>
           {market.featured && <Text style={styles.trending}>· TRENDING</Text>}
+          {typeof market.last1hPoolDeltaPct === 'number' &&
+          Math.abs(market.last1hPoolDeltaPct) >= 1 ? (
+            <View
+              style={[
+                styles.deltaPill,
+                {
+                  backgroundColor: `${accent}1A`,
+                  borderColor: `${accent}55`,
+                },
+              ]}
+            >
+              <Feather
+                name={market.last1hPoolDeltaPct >= 0 ? 'trending-up' : 'trending-down'}
+                size={rs.font(10)}
+                color={accent}
+              />
+              <Text style={[styles.deltaText, { color: accent }]}>
+                {market.last1hPoolDeltaPct >= 0 ? '+' : ''}
+                {Math.round(market.last1hPoolDeltaPct)}% 1h
+              </Text>
+            </View>
+          ) : null}
         </View>
         <View style={styles.closesIn}>
-          <Feather name="clock" size={rs.font(11)} color={isSoon ? '#FF6500' : '#5A5A5A'} />
-          <Text style={[styles.closesText, isSoon && styles.closesTextUrgent]}>
+          <Feather
+            name="clock"
+            size={rs.font(11)}
+            color={isSoon ? accent : Colors.text.tertiary}
+          />
+          <Text
+            style={[
+              styles.closesText,
+              isSoon && { color: accent, fontFamily: Fonts.semibold },
+            ]}
+          >
             {closesLabel}
           </Text>
         </View>
       </View>
 
-      {/* 2. Question — the dominant element */}
+      {stateVariant ? (
+        <View style={styles.chipRow}>
+          <StateVariantChip variant={stateVariant} />
+        </View>
+      ) : null}
+
+      {/* 2. Question + image */}
       <View style={styles.questionRow}>
-        <Text style={styles.question}>{market.question}</Text>
+        <Text style={styles.question} numberOfLines={3}>
+          {market.question}
+        </Text>
         {market.imageUrl ? (
           <Image
             source={{ uri: market.imageUrl }}
@@ -92,142 +191,133 @@ export const MarketCardFull: React.FC<MarketCardFullProps> = ({
         ) : null}
       </View>
 
-      {/* 3. Outcome block — leader (~70%) + trailer (~30%) */}
-      {visible.length > 0 && (
-        <View style={styles.outcomesWrap}>
-          <View style={styles.outcomes}>
-            {visible.map((entry, index) => {
-              const accent = isBinary
-                ? (scheme[index] ?? '#888888')
-                : index === 0
-                  ? '#FF6500'
-                  : '#6B6B6B';
-              const isLeader = index === 0;
-              const flex = equalSplit ? 1 : isLeader ? 7 : 3;
-
-              const percent = poolExists
-                ? getOutcomePercent(entry.outcome.totalStakedKobo, market.totalPoolKobo)
-                : null;
-              const multiplier = poolExists
-                ? getOutcomeMultiplier(entry.outcome.totalStakedKobo, market.totalPoolKobo)
-                : null;
-
-              return (
-                <View
-                  key={entry.outcome.id}
-                  style={[
-                    styles.outcomeBox,
-                    {
-                      flex,
-                      backgroundColor: isLeader ? `${accent}1F` : '#161616',
-                      borderColor: isLeader ? `${accent}55` : '#222222',
-                    },
-                  ]}
-                >
-                  <View style={styles.outcomeRow}>
-                    <View style={[styles.dot, { backgroundColor: accent }]} />
-                    <Text
-                      style={[
-                        styles.outcomeLabel,
-                        isLeader ? styles.outcomeLabelLeader : styles.outcomeLabelTrailer,
-                      ]}
-                      numberOfLines={1}
-                    >
-                      {entry.outcome.label}
-                    </Text>
-                  </View>
-                  {poolExists && (
-                    <View style={styles.outcomeMeta}>
-                      {percent !== null && (
-                        <Text
-                          style={[
-                            isLeader ? styles.percentLeader : styles.percentTrailer,
-                            { color: accent },
-                          ]}
-                        >
-                          {percent}%
-                        </Text>
-                      )}
-                      {multiplier !== null && isLeader && (
-                        <Text style={styles.multiplier}>{multiplier}x</Text>
-                      )}
-                    </View>
-                  )}
-                </View>
-              );
-            })}
+      {/* 3. Sparkline + Combined rail. Sparkline is absolutely positioned
+            behind the rail at 30% opacity, the rail sits on top. */}
+      {leader && trailer ? (
+        <View style={styles.railLayer}>
+          <View style={styles.sparkLayer} pointerEvents="none">
+            <Sparkline
+              series={market.sparkline24h}
+              seed={sparkSeed}
+              width={rs.size(320)}
+              height={rs.size(32)}
+              color={accent}
+              opacity={0.3}
+            />
           </View>
-
-          {hiddenCount > 0 && (
-            <View style={styles.moreOutcomes}>
-              <Text style={styles.moreText}>+{hiddenCount} more options</Text>
-              <Feather name="chevron-down" size={rs.font(11)} color="#5A5A5A" />
-            </View>
-          )}
+          <CombinedRail
+            leaderLabel={leader.label}
+            leaderPercent={leaderPct}
+            leaderColor={accent}
+            trailerLabel={trailer.label}
+            trailerPercent={trailerPct}
+            trailerColor={trailerAccent}
+            height={rs.size(28)}
+            still={resolved}
+          />
         </View>
-      )}
+      ) : null}
 
-      {/* 4. Quiet metadata strip */}
+      {hiddenCount > 0 ? (
+        <View style={styles.moreOutcomes}>
+          <Text style={styles.moreText}>+{hiddenCount} more options</Text>
+          <Feather name="chevron-down" size={rs.font(11)} color={Colors.text.tertiary} />
+        </View>
+      ) : null}
+
+      {/* 4. Avatar stack + crumbs */}
       <View style={styles.metaStrip}>
+        {market.bettorCount > 0 ? (
+          <AvatarStack entries={deriveStackers(market)} total={market.bettorCount} />
+        ) : null}
         {poolExists ? (
           <Text style={styles.metaItem}>
-            <Text style={styles.metaStrong}>{formatPoolKobo(market.totalPoolKobo)}</Text>
+            <Text style={styles.metaStrong}>  {formatPoolKobo(market.totalPoolKobo)}</Text>
             <Text style={styles.metaSoft}> pool</Text>
           </Text>
         ) : (
-          <Text style={styles.firstStake}>Be the first to stake</Text>
+          <Text style={styles.firstStake}>  Be the first to stake</Text>
         )}
-        {market.bettorCount > 0 && (
-          <>
-            <Text style={styles.metaDot}>·</Text>
-            <Text style={styles.metaItem}>
-              <Text style={styles.metaStrong}>{market.bettorCount}</Text>
-              <Text style={styles.metaSoft}> {market.bettorCount === 1 ? 'staker' : 'stakers'}</Text>
-            </Text>
-          </>
-        )}
-        <Text style={styles.metaDot}>·</Text>
         <View style={styles.metaInline}>
-          <Feather name="message-square" size={rs.font(11)} color="#5A5A5A" />
-          <Text style={styles.metaSoftInline}> {market.commentCount}</Text>
+          <Feather
+            name="message-square"
+            size={rs.font(11)}
+            color={Colors.text.tertiary}
+            style={styles.metaIcon}
+          />
+          <Text style={styles.metaSoftInline}>{market.commentCount}</Text>
         </View>
       </View>
 
-      {/* 5. Single CTA — context-dependent */}
-      <CardCta variant={ctaVariant} />
-    </View>
-  );
-};
-
-const CardCta: React.FC<{ variant: MarketCardCtaVariant }> = ({ variant }) => {
-  if (variant === 'stake') {
-    return (
-      <View style={styles.ctaStake}>
-        <Text style={styles.ctaStakeText}>Stake now</Text>
-        <Feather name="arrow-right" size={rs.font(14)} color="#0A0A0A" />
-      </View>
-    );
-  }
-  return (
-    <View style={styles.ctaView}>
-      <Text style={styles.ctaViewText}>View market</Text>
-      <Feather name="chevron-right" size={rs.font(14)} color="#FF6500" />
+      {/* 5. Dual inline CTAs (only when staking is available). */}
+      {ctaVariant === 'stake' && leader && trailer && !resolved ? (
+        <View style={styles.ctaRow}>
+          <PressableSpring
+            variant="primary"
+            haptic="medium"
+            onPress={onPressLeader}
+            style={[
+              styles.cta,
+              { backgroundColor: `${accent}26`, borderColor: `${accent}66` },
+            ]}
+            accessibilityLabel={`Stake ${leader.label}`}
+          >
+            <Text style={[styles.ctaLabel, { color: accent }]} numberOfLines={1}>
+              Stake {leader.label}
+            </Text>
+            {leaderMult ? (
+              <Text style={[styles.ctaMult, { color: accent }]}>{leaderMult}x</Text>
+            ) : null}
+          </PressableSpring>
+          <PressableSpring
+            variant="primary"
+            haptic="medium"
+            onPress={onPressTrailer}
+            style={[
+              styles.cta,
+              { backgroundColor: `${trailerAccent}1A`, borderColor: `${trailerAccent}55` },
+            ]}
+            accessibilityLabel={`Stake ${trailer.label}`}
+          >
+            <Text style={[styles.ctaLabel, { color: trailerAccent }]} numberOfLines={1}>
+              Stake {trailer.label}
+            </Text>
+            {trailerMult ? (
+              <Text style={[styles.ctaMult, { color: trailerAccent }]}>{trailerMult}x</Text>
+            ) : null}
+          </PressableSpring>
+        </View>
+      ) : null}
     </View>
   );
 };
 
 const styles = StyleSheet.create({
   container: {
-    backgroundColor: '#161616',
-    borderRadius: rs.size(16),
+    backgroundColor: Colors.surface['01'],
+    borderRadius: rs.size(18),
     padding: rs.size(16),
+    borderWidth: 1,
+    borderColor: Colors.border.s01,
+    overflow: 'hidden',
+    gap: rs.size(10),
   },
-
-  // 1. Meta row
+  containerResolved: {
+    opacity: 0.55,
+  },
+  accentBar: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    width: rs.size(24),
+    height: rs.size(3),
+    borderTopLeftRadius: rs.size(18),
+  },
   metaRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    marginTop: rs.size(2),
   },
   metaLeft: {
     flexDirection: 'row',
@@ -238,13 +328,12 @@ const styles = StyleSheet.create({
   category: {
     fontFamily: Fonts.bold,
     fontSize: rs.font(10),
-    color: '#7A7A7A',
-    letterSpacing: 0.8,
+    letterSpacing: 0.9,
   },
   trending: {
     fontFamily: Fonts.bold,
     fontSize: rs.font(10),
-    color: '#FF6500',
+    color: Colors.brand,
     letterSpacing: 0.6,
   },
   closesIn: {
@@ -255,16 +344,10 @@ const styles = StyleSheet.create({
   closesText: {
     fontFamily: Fonts.medium,
     fontSize: rs.font(11),
-    color: '#5A5A5A',
+    color: Colors.text.tertiary,
   },
-  closesTextUrgent: {
-    color: '#FF6500',
-    fontFamily: Fonts.semibold,
-  },
-
-  // 2. Question
   questionRow: {
-    marginTop: rs.size(10),
+    marginTop: rs.size(4),
     flexDirection: 'row',
     alignItems: 'flex-start',
     gap: rs.size(12),
@@ -273,98 +356,44 @@ const styles = StyleSheet.create({
     flex: 1,
     fontFamily: Fonts.bold,
     fontSize: rs.font(18),
-    color: '#FFFFFF',
+    color: Colors.text.primary,
     lineHeight: rs.font(25),
     letterSpacing: -0.2,
   },
   thumb: {
-    width: rs.size(48),
-    height: rs.size(48),
-    borderRadius: rs.size(12),
-    backgroundColor: '#1A1A1A',
+    width: rs.size(64),
+    height: rs.size(64),
+    borderRadius: rs.size(14),
+    backgroundColor: Colors.surface['00'],
   },
-
-  // 3. Outcome block
-  outcomesWrap: {
-    marginTop: rs.size(16),
-    gap: rs.size(8),
+  railLayer: {
+    marginTop: rs.size(6),
+    justifyContent: 'center',
   },
-  outcomes: {
-    flexDirection: 'row',
-    gap: rs.size(8),
-    alignItems: 'stretch',
-  },
-  outcomeBox: {
-    minWidth: 0,
-    borderRadius: rs.size(12),
-    paddingVertical: rs.size(12),
-    paddingHorizontal: rs.size(12),
-    borderWidth: 1,
-    justifyContent: 'space-between',
-    gap: rs.size(8),
-  },
-  outcomeRow: {
-    flexDirection: 'row',
+  sparkLayer: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: 'center',
     alignItems: 'center',
-    gap: rs.size(7),
-  },
-  dot: {
-    width: rs.size(7),
-    height: rs.size(7),
-    borderRadius: rs.size(4),
-  },
-  outcomeLabel: {
-    color: '#FFFFFF',
-    flexShrink: 1,
-  },
-  outcomeLabelLeader: {
-    fontFamily: Fonts.bold,
-    fontSize: rs.font(16),
-  },
-  outcomeLabelTrailer: {
-    fontFamily: Fonts.semibold,
-    fontSize: rs.font(13),
-    color: '#BFBFBF',
-  },
-  outcomeMeta: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: rs.size(6),
-  },
-  percentLeader: {
-    fontFamily: Fonts.bold,
-    fontSize: rs.font(16),
-  },
-  percentTrailer: {
-    fontFamily: Fonts.semibold,
-    fontSize: rs.font(12),
-  },
-  multiplier: {
-    fontFamily: Fonts.medium,
-    fontSize: rs.font(11),
-    color: '#6B6B6B',
   },
   moreOutcomes: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: rs.size(4),
-    paddingVertical: rs.size(6),
+    marginTop: rs.size(-4),
   },
   moreText: {
     fontFamily: Fonts.medium,
     fontSize: rs.font(11),
-    color: '#5A5A5A',
+    color: Colors.text.tertiary,
     letterSpacing: 0.2,
   },
-
-  // 4. Metadata strip
   metaStrip: {
-    marginTop: rs.size(14),
+    marginTop: rs.size(4),
     flexDirection: 'row',
     alignItems: 'center',
     flexWrap: 'wrap',
+    gap: rs.size(6),
   },
   metaItem: {
     fontSize: rs.font(12),
@@ -372,64 +401,75 @@ const styles = StyleSheet.create({
   metaStrong: {
     fontFamily: Fonts.semibold,
     fontSize: rs.font(12),
-    color: '#BFBFBF',
+    color: Colors.text.primary,
   },
   metaSoft: {
     fontFamily: Fonts.regular,
     fontSize: rs.font(12),
-    color: '#5A5A5A',
+    color: Colors.text.tertiary,
   },
   metaSoftInline: {
     fontFamily: Fonts.regular,
     fontSize: rs.font(12),
-    color: '#5A5A5A',
+    color: Colors.text.tertiary,
   },
   metaInline: {
     flexDirection: 'row',
     alignItems: 'center',
+    marginLeft: 'auto',
+    gap: rs.size(4),
   },
-  metaDot: {
-    fontFamily: Fonts.regular,
-    fontSize: rs.font(12),
-    color: '#3A3A3A',
-    paddingHorizontal: rs.size(6),
+  metaIcon: {
+    marginTop: rs.size(1),
   },
   firstStake: {
     fontFamily: Fonts.semibold,
     fontSize: rs.font(12),
-    color: '#FF6500',
+    color: Colors.brand,
   },
-
-  // 5. CTA
-  ctaStake: {
-    marginTop: rs.size(14),
-    backgroundColor: '#FF6500',
-    borderRadius: rs.size(12),
-    paddingVertical: rs.size(11),
+  ctaRow: {
+    marginTop: rs.size(6),
     flexDirection: 'row',
+    gap: rs.size(10),
+  },
+  cta: {
+    flex: 1,
+    height: rs.size(48),
+    borderRadius: rs.size(999),
+    borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
+    flexDirection: 'row',
     gap: rs.size(6),
+    paddingHorizontal: rs.size(12),
   },
-  ctaStakeText: {
+  ctaLabel: {
     fontFamily: Fonts.bold,
     fontSize: rs.font(13),
-    color: '#0A0A0A',
-    letterSpacing: 0.2,
   },
-  ctaView: {
-    marginTop: rs.size(14),
-    paddingTop: rs.size(12),
-    borderTopWidth: 1,
-    borderTopColor: '#1F1F1F',
+  ctaMult: {
+    fontFamily: Fonts.bold,
+    fontSize: rs.font(12),
+    fontVariant: ['tabular-nums'],
+    opacity: 0.85,
+  },
+  chipRow: {
+    marginTop: rs.size(-2),
+    flexDirection: 'row',
+  },
+  deltaPill: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'flex-end',
     gap: rs.size(3),
+    paddingHorizontal: rs.size(6),
+    paddingVertical: rs.size(2),
+    borderRadius: rs.size(999),
+    borderWidth: 1,
+    marginLeft: rs.size(4),
   },
-  ctaViewText: {
-    fontFamily: Fonts.semibold,
-    fontSize: rs.font(12),
-    color: '#FF6500',
+  deltaText: {
+    fontFamily: Fonts.bold,
+    fontSize: rs.font(10),
+    letterSpacing: 0.3,
   },
 });

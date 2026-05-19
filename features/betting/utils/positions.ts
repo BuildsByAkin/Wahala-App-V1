@@ -18,6 +18,10 @@ export type Position = {
   latestMultiplier: number | null;
   // ISO of the most recent bet, used for sort.
   lastBetAt: string;
+  // BACKEND.md §13 — denormalized camp color from the server. Optional;
+  // when present the wallet UI uses it instead of the YES/NO heuristic.
+  campColor?: string;
+  campLabel?: string;
 };
 
 export function groupBetsIntoPositions(bets: MyBet[]): Position[] {
@@ -42,6 +46,8 @@ export function groupBetsIntoPositions(bets: MyBet[]): Position[] {
         entryCount: 1,
         latestMultiplier: b.multiplier,
         lastBetAt: b.createdAt,
+        campColor: b.camp?.color,
+        campLabel: b.camp?.outcomeLabel,
       });
       continue;
     }
